@@ -1,0 +1,10 @@
+# Data files
+*.json
+*.csv
+
+*.log
+
+*.pyc
+trained_models/*
+
+documentation/*
