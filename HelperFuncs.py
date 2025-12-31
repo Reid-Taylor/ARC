@@ -6,7 +6,6 @@ from tensorflow import convert_to_tensor, int8, Tensor, TensorShape, pad
 from json import JSONDecoder
 from dataclasses import dataclass
 
-
 @dataclass
 class ARCGrid:
     """
@@ -48,20 +47,41 @@ class ARCGrid:
         assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
 
         if self.size == other.size:
-            return tf.reduce_sum(
+            measure = 0.0
+            measure += tf.reduce_sum(
                     tf.cast(
                         tf.equal(self.grid, other.grid), 
-                        tf.float32)
-                    ) / self.area
+                        tf.float32).numpy()
+                    ) 
+            measure /= self.area
         elif self.area == other.area:
-            # return 1.0
-            return np.average([
-                self.color_map[i] - other.color_map[i] 
+            measure = 0.0
+            for i in self.colors_observed:
+                measure += max(
+                    self.color_map.get(i, 0) - other.color_map.get(i, 0),
+                    0
+                )
+            measure /= self.area
+        else: # Different sizes, no overlap
+            # size_difference = (self.area - other.area % self.area) / self.area
+            measure = 0.0
+
+            input_relative_proportions = {
+                i : self.color_map.get(i, 0) / self.area
+                for i in self.colors_observed
+            }
+            output_relative_proportions = {
+                i : other.color_map.get(i, 0) / other.area
+                for i in other.colors_observed
+            }
+
+            measure += np.average([
+                (input_relative_proportions.get(i,0) - output_relative_proportions.get(i,0))**2
                 for i in self.colors_observed
             ])
-        else: # Different sizes, no overlap
-            return (self.area - other.area % self.area) / self.area
-    
+
+        return measure
+            
     def __mod__(self, other:object) -> bool:
         return all(self.size[i] % other.size[i] == 0 for i in range(len(self.size)))
     
@@ -75,20 +95,28 @@ class ARCExample:
         self.name = name
         self.input = ARCGrid(self.name, data_pair['input'])
         self.output = ARCGrid(self.name, data_pair['output'])
+        self.congruent = self._congruent()
+        self.properSubset = self._properSubset()
+        self.tiled = self._tiled()
+        self.shapeDiff = self._shapeDiff()
+        self.similarity = self._similar()
 
-    def shapeDiff(self) -> int:
+    def __str__(self) -> str:
+        return f"ARC Example: {self.name}\nInput Grid:\n{self.input.grid}\nOutput Grid:\n{self.output.grid}\nCongruent: {self.congruent}\nProper Subset: {self.properSubset}\nTiled: {self.tiled}\nShape Difference: {self.shapeDiff}\nSimilarity: {self.similarity}\n"
+
+    def _shapeDiff(self) -> int:
         return self.output.area - self.input.area
 
-    def properSubset(self) -> bool:
+    def _properSubset(self) -> bool:
         return self.output < self.input
 
-    def congruent(self) -> bool:
+    def _congruent(self) -> bool:
         return self.output == self.input
     
-    def tiled(self) -> bool:
+    def _tiled(self) -> bool:
         return self.output % self.input
 
-    def similar(self) -> float:
+    def _similar(self) -> float:
         return self.input * self.output
 
 @dataclass
@@ -150,3 +178,5 @@ class ARCProblemSet:
 
 x = ARCProblemSet.load_from_data_directory('training')[0]
 print(x)
+
+print(x.examples[0])
