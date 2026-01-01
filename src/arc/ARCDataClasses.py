@@ -1,10 +1,18 @@
+from __future__ import annotations
+
 import numpy as np
-# from tensorflow import keras
-import setuptools
-import tensorflow as tf
-from tensorflow import convert_to_tensor, int8, Tensor, TensorShape, pad
 from json import JSONDecoder
 from dataclasses import dataclass
+import torch
+import lightning as L
+from tensordict.tensordict import TensorDict
+import os
+import glob
+from jaxtyping import Array, Int, Float
+
+Grid = Int[torch.Tensor, "rows=H cols=W"]
+PaddedGrid = Int[torch.Tensor, "30 30"]
+GridSize = Int[torch.Size, "2"]
 
 @dataclass
 class ARCGrid:
@@ -13,32 +21,40 @@ class ARCGrid:
     """
     def __init__(self, name:str, values:list[list[int]]) -> None:
         self.name:str = name
-        self.grid:Tensor = convert_to_tensor(values, dtype=int8)
-        self.size:TensorShape = self.grid.shape
-        self.area:int = tf.reduce_prod(self.size).numpy().item()
+        self.grid:Grid = torch.tensor(values, dtype=torch.int8)
+        self.size:GridSize = self.grid.shape
+        self.area:int = torch.prod(torch.tensor(self.size)).item()
 
-        self.padded_grid:Tensor = pad(self.grid,
-            paddings=((30 - self.size[0],0),(0,30 - self.size[1])),
-            mode='CONSTANT', constant_values= -1
+        self.padded_grid:PaddedGrid = torch.nn.functional.pad(self.grid,
+            pad=(0,30 - self.size[1],30 - self.size[0],0),
+            mode='constant', value= -1
             )
-        self.colors_observed:set[int] = set(tf.unique(tf.reshape(self.grid, [-1]))[0].numpy().tolist())
+        self.colors_observed:set[int] = set(torch.unique(torch.reshape(self.grid, [-1])).numpy().tolist())
         self.num_colors:int = len(self.colors_observed)
-        self.color_map:dict[int, int] = {color: tf.reduce_sum(tf.cast(tf.equal(self.grid, color), tf.int32)) for color in self.colors_observed}
+        self.color_map:dict[int, int] = {
+            color: torch.sum(torch.eq(self.grid, color).int()).item()
+            for color in self.colors_observed
+        }
     
     def __eq__(self, other:object) -> bool:
-        return self.grid == other.grid
+        assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
+        return torch.equal(self.grid, other.grid)
     
     def __lt__(self, other:object) -> bool:
-        return tf.reduce_all(tf.less(self.size, other.size))
+        assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
+        return all(self.size[i] < other.size[i] for i in range(len(self.size)))
     
     def __le__(self, other:object) -> bool:
-        return tf.reduce_all(tf.less_equal(self.size, other.size))
+        assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
+        return all(self.size[i] <= other.size[i] for i in range(len(self.size)))
     
     def __gt__(self, other:object) -> bool:
-        return tf.reduce_all(tf.greater(self.size, other.size))
+        assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
+        return all(self.size[i] > other.size[i] for i in range(len(self.size)))
     
     def __ge__(self, other:object) -> bool:
-        return tf.reduce_all(tf.greater_equal(self.size, other.size))
+        assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
+        return all(self.size[i] >= other.size[i] for i in range(len(self.size)))
     
     def __mul__(self, other:object) -> float:
         """
@@ -48,11 +64,7 @@ class ARCGrid:
 
         if self.size == other.size:
             measure = 0.0
-            measure += tf.reduce_sum(
-                    tf.cast(
-                        tf.equal(self.grid, other.grid), 
-                        tf.float32).numpy()
-                    ) 
+            measure += torch.sum(torch.eq(self.grid, other.grid).float())
             measure /= self.area
         elif self.area == other.area:
             measure = 0.0
@@ -62,12 +74,11 @@ class ARCGrid:
                     0
                 )
             measure /= self.area
-        else: # Different sizes, no overlap
-            # size_difference = (self.area - other.area % self.area) / self.area
+        else:
             measure = 0.0
 
             input_relative_proportions = {
-                i : self.color_map.get(i, 0) / self.area
+                i : self.color_map[i] / self.area
                 for i in self.colors_observed
             }
             output_relative_proportions = {
@@ -75,19 +86,19 @@ class ARCGrid:
                 for i in other.colors_observed
             }
 
-            measure += np.average([
-                (input_relative_proportions.get(i,0) - output_relative_proportions.get(i,0))**2
+            measure += sum([
+                (input_relative_proportions[i] - output_relative_proportions.get(i,0))**2
                 for i in self.colors_observed
-            ])
+            ]) / self.num_colors
 
         return measure
             
     def __mod__(self, other:object) -> bool:
+        assert isinstance(other, ARCGrid), "Operand must be an instance of ARCGrid"
         return all(self.size[i] % other.size[i] == 0 for i in range(len(self.size)))
     
     def __str__(self) -> str:
         return f"{self.name}: A {self.size} grid defined by: \n{self.grid}\n"
-
 
 @dataclass
 class ARCExample:
@@ -102,7 +113,7 @@ class ARCExample:
         self.similarity = self._similar()
 
     def __str__(self) -> str:
-        return f"ARC Example: {self.name}\nInput Grid:\n{self.input.grid}\nOutput Grid:\n{self.output.grid}\nCongruent: {self.congruent}\nProper Subset: {self.properSubset}\nTiled: {self.tiled}\nShape Difference: {self.shapeDiff}\nSimilarity: {self.similarity}\n"
+        return f"ARC Problem {self.name}: First Example\nInput Grid:\n{self.input.grid}\nOutput Grid:\n{self.output.grid}\nCongruent: {self.congruent}\nProper Subset: {self.properSubset}\nTiled: {self.tiled}\nShape Difference: {self.shapeDiff}\nSimilarity: {self.similarity}\n"
 
     def _shapeDiff(self) -> int:
         return self.output.area - self.input.area
@@ -131,49 +142,50 @@ class ARCProblemSet:
         """
         Static method to load an ARCProblemSet from JSON data. Due to complications in the source formatting, we create a uniform class method to load data from the source files. 
         """
-        assert dataset in ['training', 'evaluation', 'test'], "Dataset must be one of 'training', 'evaluation', or 'test'."
+        assert dataset in ['training', 'evaluation'], "Dataset must be one of 'training' or 'evaluation'."
 
-        with open(f"data/arc-agi_{dataset}_challenges.json", 'r') as f:
-            known = JSONDecoder().decode(f.read())
-        with open(f"data/arc-agi_{dataset}_solutions.json", 'r') as f:
-            solutions = JSONDecoder().decode(f.read())
+        data_dir = f"data/ARC-AGI/data/{dataset}/"
+        json_files = glob.glob(os.path.join(data_dir, "*.json"))
+        all_data = []
 
-        return [
-            ARCProblemSet(
-                key,
-                known[key],
-                solutions[key][0]
-            )
-            for key in known.keys()
-        ]
+        for file_path in json_files:
+            with open(file_path, 'r') as f:
+                data = JSONDecoder().decode(f.read())
+                all_data.append(
+                    ARCProblemSet(
+                        os.path.basename(file_path)[:-5],  # Remove .json extension
+                        data['train'],
+                        data['test']  # Placeholder for answer; will be filled later
+                    )
+                )
 
+        return all_data
+    
     def __init__(
             self, 
             key:str, 
-            value:dict[str, list[dict[str, list[list[int]]]]], 
-            answer:list[list[int]]
+            training:list[dict[str, list[list[int]]]], 
+            challenge:list[dict[str, list[list[int]]]]
             ):
         self.name = key
-        self.num_examples = len(value['train'])
+        self.num_examples = len(training)
         self.examples = {
-            i : ARCExample(key, value['train'][i])
-            for i in range(len(value['train']))
+            i : ARCExample(key, training[i])
+            for i in range(len(training))
         }
-        self.challenge = ARCGrid(key, value['test'][0]['input'])
-        self.solution = ARCGrid(key, answer)
+        self.challenge = ARCGrid(key, challenge[0]['input'])
+        self.solution = ARCGrid(key, challenge[0]['output'])
 
-        self.predicted_grid:Tensor = tf.zeros_like(self.solution.grid)  # Placeholder for predicted grid
+        self.predicted_grid:torch.Tensor = torch.zeros_like(self.solution.grid)  # Placeholder for predicted grid
         self.accuracy:bool = self._check_prediction()
 
     def __str__(self) -> str:
         return f"ARC Problem Set: {self.name} with {self.num_examples} training examples. Prediction: {self.accuracy}.\nChallenge Grid:\n{self.challenge.grid}\nSolution Grid:\n{self.solution.grid}\nPredicted Grid:\n{self.predicted_grid}\n"
     
     def _check_prediction(self) -> bool:
-        return tf.reduce_all(
-            tf.equal(
-                self.solution.grid,
-                self.predicted_grid
-            )
+        return torch.equal(
+            self.solution.grid,
+            self.predicted_grid
         )
 
 x = ARCProblemSet.load_from_data_directory('training')[0]
