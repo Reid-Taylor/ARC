@@ -10,3 +10,6 @@ trained_models/*
 documentation/*
 
 data/*
+thoughts.txt
+
+*.ipynb
