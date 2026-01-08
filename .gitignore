@@ -13,3 +13,7 @@ data/*
 thoughts.txt
 
 *.ipynb
+
+lightning_logs/
+*.pt
+*.ckpt

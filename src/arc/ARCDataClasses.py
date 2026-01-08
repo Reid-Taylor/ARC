@@ -1,4 +1,5 @@
 from __future__ import annotations
+from turtle import position
 from beartype.typing import Optional
 
 from json import JSONDecoder
@@ -52,11 +53,11 @@ class ARCGrid:
     def __init__(self, name:str, values:list[list[int]]) -> None:
         self.name:str = name
         self.grid: Int[torch.Tensor, "1 H W"] = torch.tensor(values, dtype=torch.int8).unsqueeze(0)
-        self.padded_grid:Int[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
+        self.padded_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
             pad=(0,30 - len(values[0]),0,30 - len(values)),
             mode='constant', 
             value= -1
-            )
+            ).to(torch.float32)
         self.meta:ARCGridMeta = ARCGridMeta(self.name, self.grid)
         self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None  # Placeholder for learned embedding
 
@@ -82,7 +83,7 @@ class ARCProblemSet:
     @staticmethod
     def load_from_data_directory(
             dataset:str='training'
-            ) -> TensorDict:
+            ):
         """
         Static method to load an ARCProblemSet from JSON data. Due to complications in the source formatting, we create a uniform class method to load data from the source files. 
         """
@@ -101,20 +102,19 @@ class ARCProblemSet:
                 )
                 all_data.append(problem_set)
         
-        td = TensorDict(
-            batch_size=BATCH_SIZE,
-            device="cpu"
-        )
 
+        samples = []
         for problem in all_data:
             for tag, key, grid in problem:
-                td.update(
-                    {
-                        (tag, key, problem.name): grid
-                    }
-                )
+                samples.append({
+                    "name": problem.name,
+                    "padded_grid": grid.padded_grid.squeeze(0),  # shape: (30, 30)
+                    "embedding": grid.embedding.squeeze(0) if grid.embedding is not None else None,
+                    "meta": grid.meta,
 
-        return td
+                    # add other fields as needed
+                })
+        return samples
     
     def __init__(
             self, 
