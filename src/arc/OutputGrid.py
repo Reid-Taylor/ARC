@@ -84,10 +84,30 @@ class Decoder(nn.Module):
         attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
 
         return self.fc_out(attended_layers)
-    
+
+@beartype
+class AttributeHead(nn.Module):
+    def __init__(self, input_size:int=64, hidden_size:int=32, output_size:int=10):
+        super().__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x:Tensor) -> Float[Tensor, "B N"]:
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
 @beartype
 class LitAutoEncoder(L.LightningModule):
-    def __init__(self, encoder:"Encoder", decoder:"Decoder"):
+    def __init__(self, 
+                 encoder:"Encoder", 
+                 decoder:"Decoder", 
+                 attr_heads, 
+                 learning_rate:float=1e-3,
+                 alpha:float=0.85,
+                 learning_rate_w:float=1e-3):
         super().__init__()
         self.encoder = TensorDictModule(
             encoder,
@@ -99,32 +119,150 @@ class LitAutoEncoder(L.LightningModule):
             in_keys=["embedding"],
             out_keys=["reconstructed_grid"]
         )
+        self.attribute_heads = TensorDictModule(
+            attr_heads,
+            in_keys=["embedding"],
+            out_keys=["predicted_attributes"]
+        )
+        self.lr = learning_rate
+
+        self.raw_w = nn.Parameter(torch.zeros(2))
+        self.alpha = alpha
+        self.lr_model = learning_rate
+        self.lr_w = learning_rate_w
+
+        self.register_buffer("L0", torch.zeros(2))
+        self.L0_initialized = False
+
+        self.automatic_optimization = False
+
+    def _task_weights(self) -> Float[Tensor, "2"]:
+        w = F.softmax(self.raw_w, dim=0) + 1e-8
+        w = 2.0 * w / w.sum()
+        return w
+    
+    def forward(self, x):
+        z = self.encoder(x)['embedding']
+        x_hat = self.decoder(z)
+        y_hat = self.attribute_heads(z)
+        return z, x_hat, y_hat
 
     def training_step(self, batch):
         # training_step defines the train loop.
-        batch["embedding"] = self.encoder(batch)["embedding"]
-        x_hat = self.decoder(batch)["reconstructed_grid"]
-        loss = F.mse_loss(x_hat, batch["padded_grid"])
-        self.log("train_loss", loss)
-        return loss
+
+        opt_model, opt_w = self.optimizers()
+
+        embedding, reconstructed_grid, calculated_attributes = self.forward(batch)
+
+        reconstruction_loss = F.mse_loss(reconstructed_grid, batch["padded_grid"])
+        attribute_loss = F.mse_loss(calculated_attributes, batch["attributes"])
+
+        loss = torch.stack([reconstruction_loss, attribute_loss])
+
+        # Use a local copy for computation to avoid in-place operation issues
+        if (not self.L0_initialized):
+            self.L0[:] = loss.detach()
+            self.L0_initialized = True
+            L0_for_computation = loss.detach()
+        else:
+            L0_for_computation = self.L0
+
+        w = self._task_weights()
+
+        # Get parameters from the underlying modules, not the TensorDictModule wrappers
+        encoder_params = [p for p in self.encoder.module.parameters() if p.requires_grad]
+        decoder_params = [p for p in self.decoder.module.parameters() if p.requires_grad]
+        attr_params = [p for p in self.attribute_heads.module.parameters() if p.requires_grad]
+        
+        # Reconstruction loss depends on encoder + decoder
+        W_reconstruction = encoder_params + decoder_params
+        # Attribute loss depends on encoder + attribute heads
+        W_attribute = encoder_params + attr_params
+
+        # Compute all gradients first before any backward passes
+        G = []
+        loss_total = torch.sum((w * loss))
+        
+        # Gradients for reconstruction loss (w.r.t. encoder + decoder) - need create_graph=True for weight gradient computation
+        grads_0 = torch.autograd.grad(w[0] * loss[0], W_reconstruction, retain_graph=True, create_graph=True, allow_unused=True)
+        grads_0 = [g for g in grads_0 if g is not None]
+        if grads_0:
+            gnorm_0 = torch.norm(torch.stack([g.norm() for g in grads_0]), 2)
+        else:
+            gnorm_0 = torch.tensor(0.0, device=loss.device, requires_grad=True)
+        G.append(gnorm_0)
+        
+        # Gradients for attribute loss (w.r.t. encoder + attribute heads) - need create_graph=True for weight gradient computation
+        grads_1 = torch.autograd.grad(w[1] * loss[1], W_attribute, retain_graph=True, create_graph=True, allow_unused=True)
+        grads_1 = [g for g in grads_1 if g is not None]
+        if grads_1:
+            gnorm_1 = torch.norm(torch.stack([g.norm() for g in grads_1]), 2)
+        else:
+            gnorm_1 = torch.tensor(0.0, device=loss.device, requires_grad=True)
+        G.append(gnorm_1)
+        
+        G = torch.stack(G)
+        mean_G = G.mean()
+
+        loss_hat = (loss.detach() / (L0_for_computation + 1e-8))
+        r = loss_hat / loss_hat.mean()
+        target_G = mean_G.detach() * (r ** self.alpha)
+        
+        # Compute weight gradient loss - now G has gradients and can be backpropagated
+        loss_grad = torch.sum(torch.abs(G - target_G))
+
+        # Now perform backward passes
+        opt_model.zero_grad()
+        opt_w.zero_grad()
+
+        loss_total.backward(retain_graph=True)
+
+        loss_grad.backward()
+
+        opt_model.step()
+        opt_w.step()
+
+        self.log_dict(
+            {
+                "train/reconstruction_loss": reconstruction_loss,
+                "train/attribute_loss": attribute_loss,
+                "train/total_loss": loss_total.detach(),
+                "train/loss_grad": loss_grad.detach(),
+                "train/task_weight_reconstruction": w[0].detach(),
+                "train/task_weight_attribute": w[1].detach(),
+                "train/task_gradient_reconstruction": G[0].detach(),
+                "train/task_gradient_attribute": G[1].detach(),
+            },
+            prog_bar=True
+        )
 
     def configure_optimizers(self):
-        optimizer = optim.Adam(self.parameters(), lr=1e-3)
-        return optimizer
-
-# Learning patterns of 
-    # 1. LitAutoEncoder (Full Loop)
-    # 2. CalculationsDecoder (Full Loop)
-    # 3. LitAutoEncoder (Frozen Encoder, Trained Decoder)
+        opt_model = torch.optim.Adam(
+            [p for p in self.encoder.module.parameters() if p.requires_grad] + [p for p in self.decoder.module.parameters() if p.requires_grad] + [p for p in self.attribute_heads.module.parameters() if p.requires_grad],
+            lr=self.lr
+        )
+        opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)
+        return [opt_model, opt_w]
     
 if __name__ == "__main__":
     # model
 
     GRID_SIZE = 30*30
-    ATTENTION_SIZES = (32, 128, 512)
-    MODEL_DIM = 64
+    ATTENTION_SIZES = (32, 64, 128)
+    MODEL_DIM = 32
+    HIDDEN_ATTR_SIZE = 64
+    OUTPUT_ATTR_SIZE = 16
+    BATCH_SIZE = 31
+    EPOCHS = 5
 
-    autoencoder = LitAutoEncoder(Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE))
+    autoencoder = LitAutoEncoder(
+        Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), 
+        Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
+        AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, OUTPUT_ATTR_SIZE),
+        learning_rate=1e-3,
+        alpha=0.9,
+        learning_rate_w=5e-3
+    )
 
     training_dataset = ARCProblemSet.load_from_data_directory('training')
 
@@ -138,19 +276,21 @@ if __name__ == "__main__":
                 "encoded_grid": padded_grids + positional_encodings.reshape(-1, GRID_SIZE),
                 "embedding": None,
                 "reconstructed_grid": None,
-                "meta": [item["meta"] for item in batch]
+                "meta": [item["meta"] for item in batch],
+                "attributes": torch.stack([item["attributes"] for item in batch], dim=0).reshape(len(batch), -1).to(torch.float32),
+                "predicted_attributes": None
             },
             batch_size=len(batch)
         )
 
     train_loader = torch.utils.data.DataLoader(
         training_dataset,
-        batch_size=6,
+        batch_size=BATCH_SIZE,
         shuffle=True,
         collate_fn=collate_fn
     )
 
-    trainer = L.Trainer(max_epochs=5)
+    trainer = L.Trainer(max_epochs=EPOCHS)
     trainer.fit(model=autoencoder, train_dataloaders=train_loader)
 
     # Take a single batch from the train_loader
@@ -163,10 +303,14 @@ if __name__ == "__main__":
         sample_batch["embedding"] = encoder_out["embedding"]
         decoder_out = autoencoder.decoder(sample_batch)
         reconstructed = decoder_out["reconstructed_grid"]
+        attribute_out = autoencoder.attribute_heads(sample_batch)
+        attributes = attribute_out["predicted_attributes"]
         # Pick the first sample in the batch
         original = sample_batch["padded_grid"][2].reshape(30, 30)
         prediction = reconstructed[2].reshape(30, 30)
         grid_dim = sample_batch["meta"][2].grid_size.squeeze(0)
-        print(grid_dim)
         print("Original grid:\n", original[0:grid_dim[-2], 0:grid_dim[-1]].cpu().numpy())
         print("Predicted grid:\n", np.round(prediction[0:grid_dim[-2], 0:grid_dim[-1]].cpu().numpy()))
+
+        print("Predicted attributes:\n", attributes[2].cpu().numpy())
+        print("Actual attributes:\n", sample_batch["attributes"][2].cpu().numpy())

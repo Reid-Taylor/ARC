@@ -39,6 +39,14 @@ class ARCGridMeta:
         color_map[0,10] = 900 - self.area
         self.color_map: Int[torch.Tensor, "1 C"] = color_map
 
+    def _to_tensor(self) -> torch.Tensor:
+        return torch.cat([
+            self.area,
+            self.grid_size.reshape(-1),
+            self.num_colors,
+            self.color_map.reshape(-1)
+        ]).unsqueeze(0)
+
 @tensorclass
 @beartype
 class ARCGrid:
@@ -46,6 +54,7 @@ class ARCGrid:
     grid: Int[torch.Tensor, "1 H W"]
     padded_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
     meta: Optional[ARCGridMeta]=None
+    attributes: Optional[Int[torch.Tensor, "1 _"]] = None
     embedding: Optional[Float[torch.Tensor, "1 D"]] = None
     """
     The ARC Grid represents a bit array which outlines either an input or an output grid. We use base tensor for these bit arrays, and provide helper methods which power preprocessing for each layer of the ARC network. 
@@ -59,6 +68,7 @@ class ARCGrid:
             value= -1
             ).to(torch.float32)
         self.meta:ARCGridMeta = ARCGridMeta(self.name, self.grid)
+        self.attributes: Int[torch.Tensor, "1 _"] = self.meta._to_tensor()
         self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None  # Placeholder for learned embedding
 
 @dataclass
@@ -111,7 +121,7 @@ class ARCProblemSet:
                     "padded_grid": grid.padded_grid.squeeze(0),  # shape: (30, 30)
                     "embedding": grid.embedding.squeeze(0) if grid.embedding is not None else None,
                     "meta": grid.meta,
-
+                    "attributes": grid.attributes.squeeze(0) if grid.attributes is not None else None,
                     # add other fields as needed
                 })
         return samples
@@ -145,4 +155,4 @@ class ARCProblemSet:
 
 if __name__ == "__main__":
     x= ARCProblemSet.load_from_data_directory('training')
-    print(x)
+    # print(x[0].get("attributes").shape)

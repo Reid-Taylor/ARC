@@ -56,6 +56,7 @@ def main():
 	autoencoder = LitAutoEncoder(Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE))
 	if checkpoint:
 		autoencoder = autoencoder.load_from_checkpoint(checkpoint)
+		
 		print(f"Loaded model from checkpoint: {checkpoint}")
 	else:
 		print("No checkpoint found. Training model for 50 epochs...")
