@@ -2,17 +2,20 @@
 import os
 import glob
 import torch
-import numpy as np
 from tensordict import TensorDict
 from lightning.pytorch import Trainer
-from OutputGrid import LitAutoEncoder, Encoder, Decoder, positional_encodings
+from OutputGrid import LitAutoEncoder, Encoder, Decoder, positional_encodings, AttributeHead
 from ARCDataClasses import ARCProblemSet
 
 GRID_SIZE = 30*30
-ATTENTION_SIZES = (32, 128, 512)
+ATTENTION_SIZES = (128, 256, 128)
 MODEL_DIM = 64
-TENSORDICT_PATH = "tensordict_training.pt"
-CHECKPOINT_DIR = "../../lightning_logs/"
+HIDDEN_ATTR_SIZE = 128
+OUTPUT_ATTR_SIZE = 16
+BATCH_SIZE = 41
+EPOCHS = 10
+TENSORDICT_PATH = "data/tensordict_training.pt"
+CHECKPOINT_DIR = "lightning_logs/"
 
 def get_latest_checkpoint(dir: str = CHECKPOINT_DIR) -> str | None:
 	"""
@@ -34,7 +37,9 @@ def build_tensordict():
 				"padded_grid": padded_grids,
 				"encoded_grid": padded_grids + positional_encodings.reshape(-1, GRID_SIZE),
 				"embedding": None,
-				"reconstructed_grid": None
+				"reconstructed_grid": None,
+                "attributes": torch.stack([item["attributes"] for item in batch], dim=0).reshape(len(batch), -1).to(torch.float32),
+                "predicted_attributes": None
 			},
 			batch_size=len(batch)
 		)
@@ -45,7 +50,7 @@ def build_tensordict():
 
 def main():
 	if os.path.exists(TENSORDICT_PATH):
-		tensordict = torch.load(TENSORDICT_PATH)
+		tensordict = torch.load(TENSORDICT_PATH, weights_only=False)
 		print("Loaded existing tensordict.")
 	else:
 		tensordict = build_tensordict()
@@ -53,26 +58,43 @@ def main():
 
 	# 2. Load or train model
 	checkpoint = get_latest_checkpoint()
-	autoencoder = LitAutoEncoder(Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE))
+	
 	if checkpoint:
-		autoencoder = autoencoder.load_from_checkpoint(checkpoint)
-		
+		autoencoder = LitAutoEncoder.load_from_checkpoint(
+			checkpoint, 
+			encoder=Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM),
+			decoder=Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
+			attr_heads=AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, OUTPUT_ATTR_SIZE),
+			learning_rate=1e-3,
+			alpha=0.9,
+			learning_rate_w=5e-3
+		)
 		print(f"Loaded model from checkpoint: {checkpoint}")
 	else:
-		print("No checkpoint found. Training model for 50 epochs...")
-		trainer = Trainer(max_epochs=50)
-		# For training, need a DataLoader
-		train_loader = torch.utils.data.DataLoader(
-			tensordict,
-			batch_size=23,
-			shuffle=True,
-			collate_fn=lambda x: x 
+		autoencoder = LitAutoEncoder(
+			Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), 
+			Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
+			AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, OUTPUT_ATTR_SIZE),
+			learning_rate=1e-3,
+			alpha=0.9,
+			learning_rate_w=5e-3
 		)
-		trainer.fit(model=autoencoder, train_dataloaders=train_loader)
-		# Save checkpoint manually if needed
-		ckpt_path = "autoencoder_trained.ckpt"
-		trainer.save_checkpoint(ckpt_path)
-		print(f"Model trained and saved to {ckpt_path}")
+		print(f"No checkpoint found. Training initialized model for {EPOCHS} epochs...")
+		# For training, need a DataLoader
+
+	trainer = Trainer(max_epochs=EPOCHS)
+	train_loader = torch.utils.data.DataLoader(
+		tensordict,
+		batch_size=BATCH_SIZE,
+		shuffle=True,
+		collate_fn=lambda x: x 
+	)
+	trainer.fit(model=autoencoder, train_dataloaders=train_loader)
+	# Save checkpoint manually if needed
+	os.makedirs("models", exist_ok=True)
+	ckpt_path = "models/autoencoder_trained.ckpt"
+	trainer.save_checkpoint(ckpt_path, weights_only=False)
+	print(f"Model trained and saved to {ckpt_path}")
 
 if __name__ == "__main__":
 	main()

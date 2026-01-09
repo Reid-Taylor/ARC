@@ -1,5 +1,5 @@
 from __future__ import annotations
-from turtle import position
+
 from beartype.typing import Optional
 
 from json import JSONDecoder
@@ -8,7 +8,7 @@ import torch
 import os
 import glob
 from jaxtyping import Int, Float
-from tensordict import TensorDict, tensorclass
+from tensordict import tensorclass
 from beartype import beartype
 
 C: int = 11 # Number of colors in ARC grids (0-10 plus -1 for padding)
@@ -18,26 +18,26 @@ BATCH_SIZE:int = 1
 @beartype
 class ARCGridMeta:
     name: str
-    grid: Int[torch.Tensor, '1 H W']
-    area: Optional[Int[torch.Tensor, '1']]=None
-    grid_size: Optional[Int[torch.Tensor, '1 2']]=None
-    num_colors: Optional[Int[torch.Tensor, '1']]=None
-    color_map: Optional[Int[torch.Tensor, '1 C']]=None
+    grid: Float[torch.Tensor, '1 H W']
+    area: Optional[Float[torch.Tensor, '1']]=None
+    grid_size: Optional[Float[torch.Tensor, '1 2']]=None
+    num_colors: Optional[Float[torch.Tensor, '1']]=None
+    color_map: Optional[Float[torch.Tensor, 'C']]=None
     def __init__(self, name:str, grid:torch.Tensor) -> None:
         self.name: str = name
 
-        self.area: Int[torch.Tensor, "1"] = torch.prod(torch.tensor(grid.shape)).unsqueeze(0)
+        self.area: Float[torch.Tensor, "1"] = torch.prod(torch.tensor(grid.shape)).unsqueeze(0).to(torch.float32)
 
-        self.grid_size: Int[torch.Tensor, "1 2"] = torch.tensor(grid.shape).unsqueeze(0)
+        self.grid_size: Float[torch.Tensor, "1 2"] = torch.tensor(grid.squeeze(dim=0).shape).unsqueeze(0).to(torch.float32)
 
-        unique_colors: Int[torch.Tensor, "_"] = torch.unique(torch.reshape(grid, [-1]))
-        self.num_colors: Int[torch.Tensor, '1'] = torch.tensor([len(unique_colors)])
-        color_map: Int[torch.Tensor, "1 C"] = torch.zeros((1, C), dtype=torch.int32)
+        unique_colors: Float[torch.Tensor, "_"] = torch.unique(torch.reshape(grid, [-1]))
+        self.num_colors: Float[torch.Tensor, '1'] = torch.tensor([len(unique_colors)]).to(torch.float32)
+        color_map: Float[torch.Tensor, "1 C"] = torch.zeros((C), dtype=torch.float32)
         for color in unique_colors:
             count = torch.sum(torch.eq(grid, color).int()).item()
-            color_map[0, color] = count
-        color_map[0,10] = 900 - self.area
-        self.color_map: Int[torch.Tensor, "1 C"] = color_map
+            color_map[color] = count
+        color_map[10] = 900 - self.area
+        self.color_map: Float[torch.Tensor, "C"] = color_map.to(torch.float32)
 
     def _to_tensor(self) -> torch.Tensor:
         return torch.cat([

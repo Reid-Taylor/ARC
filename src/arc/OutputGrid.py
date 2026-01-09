@@ -1,13 +1,13 @@
 from __future__ import annotations
 from beartype import beartype
 from jaxtyping import Float
-
+from typing import Dict
 import numpy as np
 import lightning as L
-from torch import optim, Tensor, matmul, nn
+from torch import Tensor, matmul, nn
 import torch
 from torch.nn import functional as F
-from tensordict.nn import TensorDictModule, TensorDictSequential
+from tensordict.nn import TensorDictModule
 from ARCDataClasses import ARCProblemSet
 from tensordict import TensorDict
 
@@ -89,14 +89,14 @@ class Decoder(nn.Module):
 class AttributeHead(nn.Module):
     def __init__(self, input_size:int=64, hidden_size:int=32, output_size:int=10):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, output_size)
+        self.fc1 = nn.Linear(input_size, hidden_size*2)
+        self.attention = AttentionHead(hidden_size*2, hidden_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, output_size)
 
     def forward(self, x:Tensor) -> Float[Tensor, "B N"]:
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.attention(x)
+        x = self.fc2(x)
         return x
 
 @beartype
@@ -104,7 +104,7 @@ class LitAutoEncoder(L.LightningModule):
     def __init__(self, 
                  encoder:"Encoder", 
                  decoder:"Decoder", 
-                 attr_heads, 
+                 attribute_requirements: Dict[str, AttributeHead],
                  learning_rate:float=1e-3,
                  alpha:float=0.85,
                  learning_rate_w:float=1e-3):
@@ -117,16 +117,22 @@ class LitAutoEncoder(L.LightningModule):
         self.decoder = TensorDictModule(
             decoder,
             in_keys=["embedding"],
-            out_keys=["reconstructed_grid"]
+            out_keys=["predicted_grid"]
         )
-        self.attribute_heads = TensorDictModule(
-            attr_heads,
-            in_keys=["embedding"],
-            out_keys=["predicted_attributes"]
-        )
+
+        for key, value in attribute_requirements.items():
+            setattr(self, f"attribute_head_{key}", TensorDictModule(
+                value,
+                in_keys=["embedding"],
+                out_keys=[f"predicted_{key}"]
+            ))
+
+        self.attributes = attribute_requirements
+        self.num_attribute_heads = len(attribute_requirements)
+
         self.lr = learning_rate
 
-        self.raw_w = nn.Parameter(torch.zeros(2))
+        self.raw_w: Float[torch.Tensor, "A"] = nn.Parameter(torch.zeros(2))
         self.alpha = alpha
         self.lr_model = learning_rate
         self.lr_w = learning_rate_w
@@ -136,15 +142,19 @@ class LitAutoEncoder(L.LightningModule):
 
         self.automatic_optimization = False
 
-    def _task_weights(self) -> Float[Tensor, "2"]:
+    def _task_weights(self) -> Float[Tensor, "A"]:
         w = F.softmax(self.raw_w, dim=0) + 1e-8
-        w = 2.0 * w / w.sum()
+        w = self.num_attribute_heads * w / w.sum()
         return w
     
-    def forward(self, x):
+    def forward(self, x) -> tuple[Float[Tensor, "B D"], Float[Tensor, "B 900"], Dict[str, Float[Tensor, "B _"]]]:
         z = self.encoder(x)['embedding']
         x_hat = self.decoder(z)
-        y_hat = self.attribute_heads(z)
+
+        y_hat = {}
+        for key in self.attributes.keys():
+            y_hat[key] = getattr(self, f"attribute_head_{key}")(z)
+
         return z, x_hat, y_hat
 
     def training_step(self, batch):
@@ -155,7 +165,9 @@ class LitAutoEncoder(L.LightningModule):
         embedding, reconstructed_grid, calculated_attributes = self.forward(batch)
 
         reconstruction_loss = F.mse_loss(reconstructed_grid, batch["padded_grid"])
-        attribute_loss = F.mse_loss(calculated_attributes, batch["attributes"])
+        attribute_loss = 0.0
+        for key in self.attributes.keys():
+            attribute_loss += F.mse_loss(calculated_attributes[key], batch[key])
 
         loss = torch.stack([reconstruction_loss, attribute_loss])
 
@@ -172,7 +184,13 @@ class LitAutoEncoder(L.LightningModule):
         # Get parameters from the underlying modules, not the TensorDictModule wrappers
         encoder_params = [p for p in self.encoder.module.parameters() if p.requires_grad]
         decoder_params = [p for p in self.decoder.module.parameters() if p.requires_grad]
-        attr_params = [p for p in self.attribute_heads.module.parameters() if p.requires_grad]
+        attr_params = [
+                *[
+                    p for key in self.attributes.keys()
+                    for p in getattr(self, f"attribute_head_{key}").module.parameters()
+                    if p.requires_grad
+                ]
+            ]
         
         # Reconstruction loss depends on encoder + decoder
         W_reconstruction = encoder_params + decoder_params
@@ -238,7 +256,15 @@ class LitAutoEncoder(L.LightningModule):
 
     def configure_optimizers(self):
         opt_model = torch.optim.Adam(
-            [p for p in self.encoder.module.parameters() if p.requires_grad] + [p for p in self.decoder.module.parameters() if p.requires_grad] + [p for p in self.attribute_heads.module.parameters() if p.requires_grad],
+            [p for p in self.encoder.module.parameters() if p.requires_grad] + 
+            [p for p in self.decoder.module.parameters() if p.requires_grad] + 
+            [
+                *[
+                    p for key in self.attributes.keys()
+                    for p in getattr(self, f"attribute_head_{key}").module.parameters()
+                    if p.requires_grad
+                ]
+            ],
             lr=self.lr
         )
         opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)
@@ -249,16 +275,24 @@ if __name__ == "__main__":
 
     GRID_SIZE = 30*30
     ATTENTION_SIZES = (32, 64, 128)
-    MODEL_DIM = 32
-    HIDDEN_ATTR_SIZE = 64
-    OUTPUT_ATTR_SIZE = 16
+    MODEL_DIM = 64
+    HIDDEN_ATTR_SIZE = 96
     BATCH_SIZE = 31
-    EPOCHS = 5
+    EPOCHS = 1
+    ATTRIBUTES = {
+        "area": 1,
+        "grid_size": 2,
+        "num_colors": 1,
+        "color_map": 11
+    }
 
     autoencoder = LitAutoEncoder(
         Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), 
         Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
-        AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, OUTPUT_ATTR_SIZE),
+        {
+            key: AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, value) 
+            for key, value in ATTRIBUTES.items()
+        },
         learning_rate=1e-3,
         alpha=0.9,
         learning_rate_w=5e-3
@@ -272,13 +306,18 @@ if __name__ == "__main__":
         return TensorDict(
             {
                 "name": names,
+                "embedding": None,
                 "padded_grid": padded_grids,
                 "encoded_grid": padded_grids + positional_encodings.reshape(-1, GRID_SIZE),
-                "embedding": None,
-                "reconstructed_grid": None,
-                "meta": [item["meta"] for item in batch],
-                "attributes": torch.stack([item["attributes"] for item in batch], dim=0).reshape(len(batch), -1).to(torch.float32),
-                "predicted_attributes": None
+                "predicted_grid": None,
+                "area": [item["meta"].area for item in batch],
+                "predicted_area": None,
+                "grid_size": [item["meta"].grid_size for item in batch],
+                "predicted_grid_size": None,
+                "num_colors": [item["meta"].num_colors for item in batch],
+                "predicted_num_colors": None,
+                "color_map": [item["meta"].color_map for item in batch],
+                "predicted_color_map": None
             },
             batch_size=len(batch)
         )
@@ -302,15 +341,32 @@ if __name__ == "__main__":
         encoder_out = autoencoder.encoder(sample_batch)
         sample_batch["embedding"] = encoder_out["embedding"]
         decoder_out = autoencoder.decoder(sample_batch)
-        reconstructed = decoder_out["reconstructed_grid"]
-        attribute_out = autoencoder.attribute_heads(sample_batch)
-        attributes = attribute_out["predicted_attributes"]
-        # Pick the first sample in the batch
-        original = sample_batch["padded_grid"][2].reshape(30, 30)
-        prediction = reconstructed[2].reshape(30, 30)
-        grid_dim = sample_batch["meta"][2].grid_size.squeeze(0)
-        print("Original grid:\n", original[0:grid_dim[-2], 0:grid_dim[-1]].cpu().numpy())
-        print("Predicted grid:\n", np.round(prediction[0:grid_dim[-2], 0:grid_dim[-1]].cpu().numpy()))
+        reconstructed = decoder_out["predicted_grid"]
 
-        print("Predicted attributes:\n", attributes[2].cpu().numpy())
-        print("Actual attributes:\n", sample_batch["attributes"][2].cpu().numpy())
+        # Get predictions from each attribute head
+        attribute_predictions = {}
+        for attr_key in ATTRIBUTES.keys():
+            attr_head = getattr(autoencoder, f"attribute_head_{attr_key}")
+            attr_out = attr_head(sample_batch)
+            attribute_predictions[attr_key] = attr_out[f"predicted_{attr_key}"]
+        
+        # Pick the first sample in the batch (index 2)
+        sample_idx = 2
+        sample_grid_size = sample_batch["grid_size"][sample_idx].squeeze().to(torch.int32)
+        original = sample_batch["padded_grid"][sample_idx].reshape(30, 30)
+        prediction = reconstructed[sample_idx].reshape(30, 30)
+        
+        print("=== GRID RECONSTRUCTION ===")
+        print("Original grid:\n", original[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy())
+        print("Predicted grid:\n", np.round(prediction[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy()))
+        
+        print("\n=== ATTRIBUTE PREDICTIONS ===")
+        for attr_key in ATTRIBUTES.keys():
+            predicted = attribute_predictions[attr_key][sample_idx].cpu().numpy()
+            actual = sample_batch[attr_key][sample_idx]
+            if hasattr(actual, 'cpu'):
+                actual = actual.cpu().numpy()
+            
+            print(f"\n{attr_key.upper()}:")
+            print(f"  Predicted: {predicted}")
+            print(f"  Actual:    {actual}")
