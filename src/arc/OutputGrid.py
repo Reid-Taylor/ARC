@@ -185,7 +185,7 @@ class LitAutoEncoder(L.LightningModule):
         encoder_params = [p for p in self.encoder.module.parameters() if p.requires_grad]
         decoder_params = [p for p in self.decoder.module.parameters() if p.requires_grad]
         attr_params = [
-                *[
+                [
                     p for key in self.attributes.keys()
                     for p in getattr(self, f"attribute_head_{key}").module.parameters()
                     if p.requires_grad
@@ -195,7 +195,7 @@ class LitAutoEncoder(L.LightningModule):
         # Reconstruction loss depends on encoder + decoder
         W_reconstruction = encoder_params + decoder_params
         # Attribute loss depends on encoder + attribute heads
-        W_attribute = encoder_params + attr_params
+        # W_attribute = encoder_params + attr_params
 
         # Compute all gradients first before any backward passes
         G = []
@@ -210,14 +210,17 @@ class LitAutoEncoder(L.LightningModule):
             gnorm_0 = torch.tensor(0.0, device=loss.device, requires_grad=True)
         G.append(gnorm_0)
         
-        # Gradients for attribute loss (w.r.t. encoder + attribute heads) - need create_graph=True for weight gradient computation
-        grads_1 = torch.autograd.grad(w[1] * loss[1], W_attribute, retain_graph=True, create_graph=True, allow_unused=True)
-        grads_1 = [g for g in grads_1 if g is not None]
-        if grads_1:
-            gnorm_1 = torch.norm(torch.stack([g.norm() for g in grads_1]), 2)
-        else:
-            gnorm_1 = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        G.append(gnorm_1)
+        for attribute in attr_params:
+            W_attribute = encoder_params + attribute
+            # Gradients for attribute loss (w.r.t. encoder + attribute heads) - need create_graph=True for weight gradient computation
+            grads_1 = None
+            grads_1 = torch.autograd.grad(w[1] * loss[1], W_attribute, retain_graph=True, create_graph=True, allow_unused=True)
+            grads_1 = [g for g in grads_1 if g is not None]
+            if grads_1:
+                gnorm_1 = torch.norm(torch.stack([g.norm() for g in grads_1]), 2)
+            else:
+                gnorm_1 = torch.tensor(0.0, device=loss.device, requires_grad=True)
+            G.append(gnorm_1)
         
         G = torch.stack(G)
         mean_G = G.mean()
@@ -283,7 +286,7 @@ if __name__ == "__main__":
         "area": 1,
         "grid_size": 2,
         "num_colors": 1,
-        "color_map": 11
+        "color_map": 10
     }
 
     autoencoder = LitAutoEncoder(

@@ -11,7 +11,7 @@ from jaxtyping import Int, Float
 from tensordict import tensorclass
 from beartype import beartype
 
-C: int = 11 # Number of colors in ARC grids (0-10 plus -1 for padding)
+C: int = 10 # Number of colors in ARC grids (0-9)
 BATCH_SIZE:int = 1
 
 @tensorclass
@@ -36,7 +36,6 @@ class ARCGridMeta:
         for color in unique_colors:
             count = torch.sum(torch.eq(grid, color).int()).item()
             color_map[color] = count
-        color_map[10] = 900 - self.area
         self.color_map: Float[torch.Tensor, "C"] = color_map.to(torch.float32)
 
     def _to_tensor(self) -> torch.Tensor:
