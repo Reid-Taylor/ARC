@@ -4,18 +4,19 @@ import glob
 import torch
 from tensordict import TensorDict
 from lightning.pytorch import Trainer
-from OutputGrid import LitAutoEncoder, Encoder, Decoder, positional_encodings, AttributeHead
+from OutputGrid import MultiTaskEncoder, Encoder, Decoder, positional_encodings, AttributeHead
 from ARCDataClasses import ARCProblemSet
+from jaxtyping import Int
 
-GRID_SIZE = 30*30
-ATTENTION_SIZES = (128, 256, 128)
-MODEL_DIM = 64
-HIDDEN_ATTR_SIZE = 128
-OUTPUT_ATTR_SIZE = 16
-BATCH_SIZE = 41
-EPOCHS = 10
-TENSORDICT_PATH = "data/tensordict_training.pt"
-CHECKPOINT_DIR = "lightning_logs/"
+GRID_SIZE: Int = 30*30
+ATTENTION_SIZES: tuple[Int, Int, Int] = (128, 256, 128)
+MODEL_DIM: Int = 64
+HIDDEN_ATTR_SIZE: Int = 128
+OUTPUT_ATTR_SIZE: Int = 16
+BATCH_SIZE: Int = 41
+EPOCHS: Int = 10
+TENSORDICT_PATH: str = "data/tensordict_training.pt"
+CHECKPOINT_DIR: str = "lightning_logs/"
 
 def get_latest_checkpoint(dir: str = CHECKPOINT_DIR) -> str | None:
 	"""
@@ -60,7 +61,7 @@ def main():
 	checkpoint = get_latest_checkpoint()
 	
 	if checkpoint:
-		autoencoder = LitAutoEncoder.load_from_checkpoint(
+		autoencoder = MultiTaskEncoder.load_from_checkpoint(
 			checkpoint, 
 			encoder=Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM),
 			decoder=Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
@@ -71,7 +72,7 @@ def main():
 		)
 		print(f"Loaded model from checkpoint: {checkpoint}")
 	else:
-		autoencoder = LitAutoEncoder(
+		autoencoder = MultiTaskEncoder(
 			Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), 
 			Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
 			AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, OUTPUT_ATTR_SIZE),

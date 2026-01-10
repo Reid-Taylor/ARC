@@ -4,52 +4,59 @@ from jaxtyping import Float
 from typing import Dict
 import numpy as np
 import lightning as L
-from torch import Tensor, matmul, nn
 import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from ARCDataClasses import ARCProblemSet
 from tensordict import TensorDict
+from jaxtyping import Int, Float
+
 
 positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
 
 @beartype
-class AttentionHead(nn.Module):
+class AttentionHead(torch.nn.Module):
+    """
+    Naive implementation of a self-attention head.
+    """
     def __init__(self, input_dim:int, head_dim:int, output_dim:int):
         super().__init__()
-        self.keys = nn.Linear(input_dim, head_dim)
-        self.queries = nn.Linear(input_dim, head_dim)
-        self.values = nn.Linear(input_dim, output_dim)
+        self.keys = torch.nn.Linear(input_dim, head_dim)
+        self.queries = torch.nn.Linear(input_dim, head_dim)
+        self.values = torch.nn.Linear(input_dim, output_dim)
 
-    def forward(self, x:Tensor) -> Float[Tensor, "B N"]:
+    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B T"]:
         keys = self.keys(x)
         queries = self.queries(x)
         values = self.values(x)
 
         d_k = keys.size()[-1]
-        scores = matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
         attention_weights = F.softmax(scores, dim=-1)
-        attended_values = matmul(attention_weights, values)
+        attended_values = torch.matmul(attention_weights, values)
         return attended_values
 
 @beartype
-class Encoder(nn.Module):
+class Encoder(torch.nn.Module):
+    """
+    An encoder module which uses attention heads to encode input grids into a latent representation.
+    """
     def __init__(self, input_size:int=30*30, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=64):
         super().__init__()
 
-        self.l1 = nn.Linear(input_size, attention_sizes[0])
+        self.l1 = torch.nn.Linear(input_size, attention_sizes[0])
 
         self.head_1 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
         self.head_2 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
         self.head_3 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
         
-        self.fc_out = nn.Linear(attention_sizes[2]*3, output_size)
-    def forward(self, x):
+        self.fc_out = torch.nn.Linear(attention_sizes[2]*3, output_size)
+    def forward(self, x) -> Float[torch.Tensor, "B D"]:
         encoded_input = F.relu(self.l1(x))
 
-        attended_input_1: Tensor = self.head_1(encoded_input)
-        attended_input_2: Tensor = self.head_2(encoded_input)
-        attended_input_3: Tensor = self.head_3(F.leaky_relu(encoded_input))
+        attended_input_1: torch.Tensor = self.head_1(encoded_input)
+        attended_input_2: torch.Tensor = self.head_2(encoded_input)
+        attended_input_3: torch.Tensor = self.head_3(F.leaky_relu(encoded_input))
 
         attended_layers = torch.cat((attended_input_1, attended_input_2, attended_input_3), dim=-1)
 
@@ -57,50 +64,56 @@ class Encoder(nn.Module):
 
 # We need to explore what typings are available for the different layers, and sequences of layers, to provide cleaner documentation throughout this project.
 @beartype
-class Decoder(nn.Module):
+class Decoder(torch.nn.Module):
     """
-    Docstring for Decoder:
-    The Decoder reconstructs the original input from the encoded representation produced by the Encoder. It mirrors the architecture of the Encoder, utilizing attention heads to effectively capture and reconstruct the input data.
-
-    Input Size: The Decoder takes as input the encoded representation of shape (B, N, D), where B is the batch size, N is the sequence length, and D is the feature dimension.
+    A decoder module which uses attention heads to decode latent representations back into a flattened grid.
     """
     def __init__(self, input_size:int=64, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=30*30):
         super().__init__()
 
-        self.fully_connected = nn.Linear(input_size, attention_sizes[0])
+        self.fully_connected = torch.nn.Linear(input_size, attention_sizes[0])
 
         self.head_1 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
         self.head_2 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
         self.head_3 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
         
-        self.fc_out = nn.Linear(attention_sizes[2]*3, output_size)
-    def forward(self, x):
+        self.fc_out = torch.nn.Linear(attention_sizes[2]*3, output_size)
+    def forward(self, x) -> Float[torch.Tensor, "B 900"]:
         attended_input = self.fully_connected(x)
 
-        input_1: Tensor = self.head_1(attended_input)
-        input_2: Tensor = self.head_2(attended_input)
-        input_3: Tensor = self.head_3(attended_input)
+        input_1: torch.Tensor = self.head_1(attended_input)
+        input_2: torch.Tensor = self.head_2(attended_input)
+        input_3: torch.Tensor = self.head_3(attended_input)
 
         attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
 
         return self.fc_out(attended_layers)
 
 @beartype
-class AttributeHead(nn.Module):
-    def __init__(self, input_size:int=64, hidden_size:int=32, output_size:int=10):
+class AttributeHead(torch.nn.Module):
+    """
+    An attribute head which predicts specific attributes from the latent representation.
+    """
+    def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size*2)
+        self.name:str = name
+        self.fc1 = torch.nn.Linear(input_size, hidden_size*2)
         self.attention = AttentionHead(hidden_size*2, hidden_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, output_size)
+        self.fc2 = torch.nn.Linear(hidden_size, output_size)
 
-    def forward(self, x:Tensor) -> Float[Tensor, "B N"]:
+    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
         x = F.relu(self.fc1(x))
         x = self.attention(x)
         x = self.fc2(x)
         return x
 
 @beartype
-class LitAutoEncoder(L.LightningModule):
+class MultiTaskEncoder(L.LightningModule):
+    """
+    An Autoencoder model which combines an encoder, decoder, and an unspecified number of attribute heads for multitask learning. 
+    
+    The autoencoder uses a custom training step which balances the losses from reconstruction and attribute prediction using dynamic task weighting based on Zhao Chen's 2018 "GradNorm" Paper.
+    """
     def __init__(self, 
                  encoder:"Encoder", 
                  decoder:"Decoder", 
@@ -132,7 +145,7 @@ class LitAutoEncoder(L.LightningModule):
 
         self.lr = learning_rate
 
-        self.raw_w: Float[torch.Tensor, "A"] = nn.Parameter(torch.zeros(2))
+        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(2))
         self.alpha = alpha
         self.lr_model = learning_rate
         self.lr_w = learning_rate_w
@@ -142,12 +155,12 @@ class LitAutoEncoder(L.LightningModule):
 
         self.automatic_optimization = False
 
-    def _task_weights(self) -> Float[Tensor, "A"]:
+    def _task_weights(self) -> Float[torch.Tensor, "A"]:
         w = F.softmax(self.raw_w, dim=0) + 1e-8
         w = self.num_attribute_heads * w / w.sum()
         return w
     
-    def forward(self, x) -> tuple[Float[Tensor, "B D"], Float[Tensor, "B 900"], Dict[str, Float[Tensor, "B _"]]]:
+    def forward(self, x) -> tuple[Float[torch.Tensor, "B D"], Float[torch.Tensor, "B 900"], Dict[str, Float[torch.Tensor, "B _"]]]:
         z = self.encoder(x)['embedding']
         x_hat = self.decoder(z)
 
@@ -158,11 +171,10 @@ class LitAutoEncoder(L.LightningModule):
         return z, x_hat, y_hat
 
     def training_step(self, batch):
-        # training_step defines the train loop.
 
         opt_model, opt_w = self.optimizers()
 
-        embedding, reconstructed_grid, calculated_attributes = self.forward(batch)
+        _, reconstructed_grid, calculated_attributes = self.forward(batch)
 
         reconstruction_loss = F.mse_loss(reconstructed_grid, batch["padded_grid"])
         attribute_loss = 0.0
@@ -171,7 +183,6 @@ class LitAutoEncoder(L.LightningModule):
 
         loss = torch.stack([reconstruction_loss, attribute_loss])
 
-        # Use a local copy for computation to avoid in-place operation issues
         if (not self.L0_initialized):
             self.L0[:] = loss.detach()
             self.L0_initialized = True
@@ -181,7 +192,6 @@ class LitAutoEncoder(L.LightningModule):
 
         w = self._task_weights()
 
-        # Get parameters from the underlying modules, not the TensorDictModule wrappers
         encoder_params = [p for p in self.encoder.module.parameters() if p.requires_grad]
         decoder_params = [p for p in self.decoder.module.parameters() if p.requires_grad]
         attr_params = [
@@ -192,16 +202,11 @@ class LitAutoEncoder(L.LightningModule):
                 ]
             ]
         
-        # Reconstruction loss depends on encoder + decoder
         W_reconstruction = encoder_params + decoder_params
-        # Attribute loss depends on encoder + attribute heads
-        # W_attribute = encoder_params + attr_params
 
-        # Compute all gradients first before any backward passes
         G = []
         loss_total = torch.sum((w * loss))
         
-        # Gradients for reconstruction loss (w.r.t. encoder + decoder) - need create_graph=True for weight gradient computation
         grads_0 = torch.autograd.grad(w[0] * loss[0], W_reconstruction, retain_graph=True, create_graph=True, allow_unused=True)
         grads_0 = [g for g in grads_0 if g is not None]
         if grads_0:
@@ -212,7 +217,6 @@ class LitAutoEncoder(L.LightningModule):
         
         for attribute in attr_params:
             W_attribute = encoder_params + attribute
-            # Gradients for attribute loss (w.r.t. encoder + attribute heads) - need create_graph=True for weight gradient computation
             grads_1 = None
             grads_1 = torch.autograd.grad(w[1] * loss[1], W_attribute, retain_graph=True, create_graph=True, allow_unused=True)
             grads_1 = [g for g in grads_1 if g is not None]
@@ -229,10 +233,8 @@ class LitAutoEncoder(L.LightningModule):
         r = loss_hat / loss_hat.mean()
         target_G = mean_G.detach() * (r ** self.alpha)
         
-        # Compute weight gradient loss - now G has gradients and can be backpropagated
         loss_grad = torch.sum(torch.abs(G - target_G))
 
-        # Now perform backward passes
         opt_model.zero_grad()
         opt_w.zero_grad()
 
@@ -272,28 +274,29 @@ class LitAutoEncoder(L.LightningModule):
         )
         opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)
         return [opt_model, opt_w]
-    
-if __name__ == "__main__":
-    # model
 
-    GRID_SIZE = 30*30
-    ATTENTION_SIZES = (32, 64, 128)
-    MODEL_DIM = 64
-    HIDDEN_ATTR_SIZE = 96
-    BATCH_SIZE = 31
-    EPOCHS = 1
-    ATTRIBUTES = {
+# TODO: Explore the application of contrastive learning to this autoencoder. Perhaps using SimCLR or BYOL techniques to improve the latent space representation at a more efficient rate than multi-task self-supervised learning enables.
+
+if __name__ == "__main__":
+    # TODO: Move all hyperparameters to a config for dev settings, perhaps using the UV library and toml file.
+    GRID_SIZE: Int = 30*30
+    ATTENTION_SIZES: Int = (32, 64, 128)
+    MODEL_DIM: Int = 64
+    HIDDEN_ATTR_SIZE: Int = 96
+    BATCH_SIZE: Int = 31
+    EPOCHS: Int = 1
+    ATTRIBUTES: Dict[str, Int] = { # TODO: There must be a better way to do this, perhaps dynamically from the dataset itself
         "area": 1,
         "grid_size": 2,
         "num_colors": 1,
         "color_map": 10
     }
 
-    autoencoder = LitAutoEncoder(
+    autoencoder = MultiTaskEncoder(
         Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), 
         Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
         {
-            key: AttributeHead(MODEL_DIM, HIDDEN_ATTR_SIZE, value) 
+            key: AttributeHead(key, MODEL_DIM, HIDDEN_ATTR_SIZE, value) 
             for key, value in ATTRIBUTES.items()
         },
         learning_rate=1e-3,
@@ -335,25 +338,21 @@ if __name__ == "__main__":
     trainer = L.Trainer(max_epochs=EPOCHS)
     trainer.fit(model=autoencoder, train_dataloaders=train_loader)
 
-    # Take a single batch from the train_loader
+    # Take a single batch from the train_loader; print out the actuals and the predictions
     sample_batch = next(iter(train_loader))
     autoencoder.eval()
     with torch.no_grad():
-        # Forward pass through encoder and decoder
-        # Prepare input for encoder (TensorDict expects 'encoded_grid')
         encoder_out = autoencoder.encoder(sample_batch)
         sample_batch["embedding"] = encoder_out["embedding"]
         decoder_out = autoencoder.decoder(sample_batch)
         reconstructed = decoder_out["predicted_grid"]
 
-        # Get predictions from each attribute head
         attribute_predictions = {}
         for attr_key in ATTRIBUTES.keys():
             attr_head = getattr(autoencoder, f"attribute_head_{attr_key}")
             attr_out = attr_head(sample_batch)
             attribute_predictions[attr_key] = attr_out[f"predicted_{attr_key}"]
         
-        # Pick the first sample in the batch (index 2)
         sample_idx = 2
         sample_grid_size = sample_batch["grid_size"][sample_idx].squeeze().to(torch.int32)
         original = sample_batch["padded_grid"][sample_idx].reshape(30, 30)
