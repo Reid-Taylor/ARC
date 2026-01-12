@@ -1,6 +1,5 @@
 from __future__ import annotations
 from beartype import beartype
-from jaxtyping import Float
 from typing import Dict
 import numpy as np
 import lightning as L
@@ -10,102 +9,9 @@ from tensordict.nn import TensorDictModule
 from ARCDataClasses import ARCProblemSet
 from tensordict import TensorDict
 from jaxtyping import Int, Float
-
+from arc.ARCNetworks import Encoder, Decoder, AttributeHead
 
 positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
-
-@beartype
-class AttentionHead(torch.nn.Module):
-    """
-    Naive implementation of a self-attention head.
-    """
-    def __init__(self, input_dim:int, head_dim:int, output_dim:int):
-        super().__init__()
-        self.keys = torch.nn.Linear(input_dim, head_dim)
-        self.queries = torch.nn.Linear(input_dim, head_dim)
-        self.values = torch.nn.Linear(input_dim, output_dim)
-
-    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B T"]:
-        keys = self.keys(x)
-        queries = self.queries(x)
-        values = self.values(x)
-
-        d_k = keys.size()[-1]
-        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
-        attention_weights = F.softmax(scores, dim=-1)
-        attended_values = torch.matmul(attention_weights, values)
-        return attended_values
-
-@beartype
-class Encoder(torch.nn.Module):
-    """
-    An encoder module which uses attention heads to encode input grids into a latent representation.
-    """
-    def __init__(self, input_size:int=30*30, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=64):
-        super().__init__()
-
-        self.l1 = torch.nn.Linear(input_size, attention_sizes[0])
-
-        self.head_1 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_2 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_3 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        
-        self.fc_out = torch.nn.Linear(attention_sizes[2]*3, output_size)
-    def forward(self, x) -> Float[torch.Tensor, "B D"]:
-        encoded_input = F.relu(self.l1(x))
-
-        attended_input_1: torch.Tensor = self.head_1(encoded_input)
-        attended_input_2: torch.Tensor = self.head_2(encoded_input)
-        attended_input_3: torch.Tensor = self.head_3(F.leaky_relu(encoded_input))
-
-        attended_layers = torch.cat((attended_input_1, attended_input_2, attended_input_3), dim=-1)
-
-        return self.fc_out(attended_layers)
-
-# We need to explore what typings are available for the different layers, and sequences of layers, to provide cleaner documentation throughout this project.
-@beartype
-class Decoder(torch.nn.Module):
-    """
-    A decoder module which uses attention heads to decode latent representations back into a flattened grid.
-    """
-    def __init__(self, input_size:int=64, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=30*30):
-        super().__init__()
-
-        self.fully_connected = torch.nn.Linear(input_size, attention_sizes[0])
-
-        self.head_1 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_2 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_3 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        
-        self.fc_out = torch.nn.Linear(attention_sizes[2]*3, output_size)
-    def forward(self, x) -> Float[torch.Tensor, "B 900"]:
-        attended_input = self.fully_connected(x)
-
-        input_1: torch.Tensor = self.head_1(attended_input)
-        input_2: torch.Tensor = self.head_2(attended_input)
-        input_3: torch.Tensor = self.head_3(attended_input)
-
-        attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
-
-        return self.fc_out(attended_layers)
-
-@beartype
-class AttributeHead(torch.nn.Module):
-    """
-    An attribute head which predicts specific attributes from the latent representation.
-    """
-    def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10):
-        super().__init__()
-        self.name:str = name
-        self.fc1 = torch.nn.Linear(input_size, hidden_size*2)
-        self.attention = AttentionHead(hidden_size*2, hidden_size, hidden_size)
-        self.fc2 = torch.nn.Linear(hidden_size, output_size)
-
-    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
-        x = F.relu(self.fc1(x))
-        x = self.attention(x)
-        x = self.fc2(x)
-        return x
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
@@ -113,6 +19,8 @@ class MultiTaskEncoder(L.LightningModule):
     An Autoencoder model which combines an encoder, decoder, and an unspecified number of attribute heads for multitask learning. 
     
     The autoencoder uses a custom training step which balances the losses from reconstruction and attribute prediction using dynamic task weighting based on Zhao Chen's 2018 "GradNorm" Paper.
+
+    We combine this self-supervised and supervised learning approach with contrastive, unsupervised learning to further improve the latent space representation, inspired by SimCLR and BYOL techniques.
     """
     def __init__(self, 
                  encoder:"Encoder", 
@@ -132,6 +40,14 @@ class MultiTaskEncoder(L.LightningModule):
             in_keys=["embedding"],
             out_keys=["predicted_grid"]
         )
+        self.contrastive_projection = None
+
+        # for key, value in contrastive_requirements.items():
+        #     setattr(self, f"contrastive_head_{key}", TensorDictModule(
+        #         value,
+        #         in_keys=["embedding"],
+        #         out_keys=[f"projected_{key}"]
+        #     ))
 
         for key, value in attribute_requirements.items():
             setattr(self, f"attribute_head_{key}", TensorDictModule(
@@ -140,24 +56,23 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.attributes = attribute_requirements
-        self.num_attribute_heads = len(attribute_requirements)
+        self.attributes: dict[str, AttributeHead] = attribute_requirements
 
-        self.lr = learning_rate
+        self.lr: float = learning_rate
 
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(2))
-        self.alpha = alpha
-        self.lr_model = learning_rate
-        self.lr_w = learning_rate_w
+        self.alpha: float = alpha
+        self.lr_model: float = learning_rate
+        self.lr_w: float = learning_rate_w
 
         self.register_buffer("L0", torch.zeros(2))
-        self.L0_initialized = False
+        self.L0_initialized: bool = False
 
-        self.automatic_optimization = False
+        self.automatic_optimization: bool = False
 
     def _task_weights(self) -> Float[torch.Tensor, "A"]:
         w = F.softmax(self.raw_w, dim=0) + 1e-8
-        w = self.num_attribute_heads * w / w.sum()
+        w = 2 * w / w.sum()
         return w
     
     def forward(self, x) -> tuple[Float[torch.Tensor, "B D"], Float[torch.Tensor, "B 900"], Dict[str, Float[torch.Tensor, "B _"]]]:

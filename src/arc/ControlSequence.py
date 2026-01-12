@@ -4,7 +4,7 @@ import glob
 import torch
 from tensordict import TensorDict
 from lightning.pytorch import Trainer
-from OutputGrid import MultiTaskEncoder, Encoder, Decoder, positional_encodings, AttributeHead
+from arc.ARCModule import MultiTaskEncoder, Encoder, Decoder, positional_encodings, AttributeHead
 from ARCDataClasses import ARCProblemSet
 from jaxtyping import Int
 

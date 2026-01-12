@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import Union
 
 from beartype.typing import Optional
 
@@ -58,16 +59,20 @@ class ARCGrid:
     """
     The ARC Grid represents a bit array which outlines either an input or an output grid. We use base tensor for these bit arrays, and provide helper methods which power preprocessing for each layer of the ARC network. 
     """
-    def __init__(self, name:str, values:list[list[int]]) -> None:
+    def __init__(self, name:str, values:Union[list[list[int]], torch.Tensor]) -> None:
         self.name:str = name
         self.grid: Int[torch.Tensor, "1 H W"] = torch.tensor(values, dtype=torch.int8).unsqueeze(0)
+
         self.padded_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
             pad=(0,30 - len(values[0]),0,30 - len(values)),
             mode='constant', 
             value= -1
             ).to(torch.float32)
+        
         self.meta:ARCGridMeta = ARCGridMeta(self.name, self.grid)
+
         self.attributes: Int[torch.Tensor, "1 _"] = self.meta._to_tensor()
+
         self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None  # Placeholder for learned embedding
 
 @dataclass
