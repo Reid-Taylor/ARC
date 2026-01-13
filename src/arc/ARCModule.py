@@ -1,14 +1,11 @@
 from __future__ import annotations
 from beartype import beartype
 from typing import Dict
-import numpy as np
 import lightning as L
 import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
-from ARCDataClasses import ARCProblemSet
-from tensordict import TensorDict
-from jaxtyping import Int, Float
+from jaxtyping import Float
 from arc.ARCNetworks import Encoder, Decoder, AttributeHead
 
 positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
@@ -22,79 +19,138 @@ class MultiTaskEncoder(L.LightningModule):
 
     We combine this self-supervised and supervised learning approach with contrastive, unsupervised learning to further improve the latent space representation, inspired by SimCLR and BYOL techniques.
     """
-    def __init__(self, 
-                 encoder:"Encoder", 
-                 decoder:"Decoder", 
-                 attribute_requirements: Dict[str, AttributeHead],
-                 learning_rate:float=1e-3,
-                 alpha:float=0.85,
-                 learning_rate_w:float=1e-3):
+    def __init__(self, encoder:"Encoder", decoder:"Decoder", attribute_requirements: Dict[str, AttributeHead], task_type: Dict[str, str], learning_rate:float=1e-3, alpha:float=0.85) -> None:
         super().__init__()
-        self.encoder = TensorDictModule(
+
+        self.online_encoder = TensorDictModule(
             encoder,
             in_keys=["encoded_grid"],
-            out_keys=["embedding"]
+            out_keys=["online_embedding"]
         )
+        self.online_projector = TensorDictModule(
+            None, #TODO: Define this
+            in_keys=["online_embedding"],
+            out_keys=["online_representation"]
+        )
+
+        self.target_encoder = TensorDictModule(
+            None, # encoder #TODO: Define this differently to not share weights
+            in_keys=["encoded_grid"],
+            out_keys=["target_embedding"]
+        )
+        self.target_projector = TensorDictModule(
+            None, #TODO: Define this
+            in_keys=["target_embedding"],
+            out_keys=["target_representation"]
+        )
+        
+        self.online_predictor = TensorDictModule(
+            None, #TODO: Define this
+            in_keys=["online_representation"],
+            out_keys=["predicted_target_representation"]
+        )
+
         self.decoder = TensorDictModule(
             decoder,
-            in_keys=["embedding"],
+            in_keys=["online_embedding"],
             out_keys=["predicted_grid"]
         )
-        self.contrastive_projection = None
 
-        # for key, value in contrastive_requirements.items():
-        #     setattr(self, f"contrastive_head_{key}", TensorDictModule(
-        #         value,
-        #         in_keys=["embedding"],
-        #         out_keys=[f"projected_{key}"]
-        #     ))
+        self.task_invariants: list[str] = []
+        self.task_sensitives: list[str] = []
+
+        for key, value in task_type.items():
+            if value == "task_invariant":
+                self.task_invariants.append(key)
+            elif value == "task_sensitive":
+                self.task_sensitives.append(key)
+                setattr(self, f"attribute_detector_{key}", TensorDictModule(
+                    AttributeHead(
+                        name=f"attribute_{key}",
+                        input_dim=encoder.output_size,
+                        hidden_dim=encoder.output_size,
+                        output_dim=encoder.output_size
+                    ),
+                    in_keys=["online_representation"],
+                    out_keys=[f"predicted_presence_{key}"]
+                ))
+            else: 
+                raise ValueError(f"Unknown task type '{value}' for task '{key}'")
+
 
         for key, value in attribute_requirements.items():
             setattr(self, f"attribute_head_{key}", TensorDictModule(
                 value,
-                in_keys=["embedding"],
+                in_keys=["online_embedding"],
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.attributes: dict[str, AttributeHead] = attribute_requirements
+        self.downstream_attributes: dict[str, AttributeHead] = attribute_requirements
 
         self.lr: float = learning_rate
 
-        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(2))
+        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(2)) # TODO: Update for more than 2 tasks
         self.alpha: float = alpha
-        self.lr_model: float = learning_rate
-        self.lr_w: float = learning_rate_w
 
-        self.register_buffer("L0", torch.zeros(2))
+        self.register_buffer("L0", torch.zeros(2)) # TODO: Update for more than 2 tasks
         self.L0_initialized: bool = False
 
         self.automatic_optimization: bool = False
 
-    def _task_weights(self) -> Float[torch.Tensor, "A"]:
+    def _task_weights(self) -> Float[torch.Tensor, "A"]:  # TODO: Update for more than 2 tasks
         w = F.softmax(self.raw_w, dim=0) + 1e-8
         w = 2 * w / w.sum()
         return w
     
-    def forward(self, x) -> tuple[Float[torch.Tensor, "B D"], Float[torch.Tensor, "B 900"], Dict[str, Float[torch.Tensor, "B _"]]]:
-        z = self.encoder(x)['embedding']
+    def forward(self, x) -> Dict[str, Float[torch.Tensor, "..."]]:
+        # Encode input grid into latent embedding space
+        z = self.online_encoder(x)['online_embedding']
+
+        # Reconstruct input grid from embedding
         x_hat = self.decoder(z)
 
+        # Predict attributes from embedding
         y_hat = {}
-        for key in self.attributes.keys():
+        for key in self.downstream_attributes.keys():
             y_hat[key] = getattr(self, f"attribute_head_{key}")(z)
 
-        return z, x_hat, y_hat
+        # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
+        c = self.online_projector(z)
+        # Prediction of c_tilde given c
+        c_tilde_hat = self.online_predictor(c)
 
-    def training_step(self, batch):
+        # Encode augmented input into the latent embedding space, using target encoder
+        z_tilde = self.target_encoder(x)['target_embedding'] 
+        # We project the latent embedding into the contrastive learning latent space
+        c_tilde = self.target_projector(z_tilde)
+
+        attribute_detections = {}
+        for key in self.task_sensitives:
+            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
+
+        results = {
+            "online_embedding": z,
+            "target_embedding": z_tilde,
+            "online_representation": c,
+            "target_representation": c_tilde,
+            "predicted_target_representation": c_tilde_hat,
+            "predicted_grid": x_hat,
+            "predicted_downstream_attributes": y_hat,
+            "predicted_task_sensitive_attributes": attribute_detections
+        }
+
+        return results
+
+    def training_step(self, batch): # TODO: Update for more than 2 tasks
 
         opt_model, opt_w = self.optimizers()
 
-        _, reconstructed_grid, calculated_attributes = self.forward(batch)
+        results = self.forward(batch)
 
-        reconstruction_loss = F.mse_loss(reconstructed_grid, batch["padded_grid"])
+        reconstruction_loss = F.mse_loss(results["predicted_grid"], batch["padded_grid"])
         attribute_loss = 0.0
-        for key in self.attributes.keys():
-            attribute_loss += F.mse_loss(calculated_attributes[key], batch[key])
+        for key in self.downstream_attributes.keys():
+            attribute_loss += F.mse_loss(results["predicted_downstream_attributes"][key], batch[key])
 
         loss = torch.stack([reconstruction_loss, attribute_loss])
 
@@ -111,7 +167,7 @@ class MultiTaskEncoder(L.LightningModule):
         decoder_params = [p for p in self.decoder.module.parameters() if p.requires_grad]
         attr_params = [
                 [
-                    p for key in self.attributes.keys()
+                    p for key in self.downstream_attributes.keys()
                     for p in getattr(self, f"attribute_head_{key}").module.parameters()
                     if p.requires_grad
                 ]
@@ -189,101 +245,3 @@ class MultiTaskEncoder(L.LightningModule):
         )
         opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)
         return [opt_model, opt_w]
-
-# TODO: Explore the application of contrastive learning to this autoencoder. Perhaps using SimCLR or BYOL techniques to improve the latent space representation at a more efficient rate than multi-task self-supervised learning enables.
-
-if __name__ == "__main__":
-    # TODO: Move all hyperparameters to a config for dev settings, perhaps using the UV library and toml file.
-    GRID_SIZE: Int = 30*30
-    ATTENTION_SIZES: Int = (32, 64, 128)
-    MODEL_DIM: Int = 64
-    HIDDEN_ATTR_SIZE: Int = 96
-    BATCH_SIZE: Int = 31
-    EPOCHS: Int = 1
-    ATTRIBUTES: Dict[str, Int] = { # TODO: There must be a better way to do this, perhaps dynamically from the dataset itself
-        "area": 1,
-        "grid_size": 2,
-        "num_colors": 1,
-        "color_map": 10
-    }
-
-    autoencoder = MultiTaskEncoder(
-        Encoder(GRID_SIZE, ATTENTION_SIZES, MODEL_DIM), 
-        Decoder(MODEL_DIM, ATTENTION_SIZES, GRID_SIZE),
-        {
-            key: AttributeHead(key, MODEL_DIM, HIDDEN_ATTR_SIZE, value) 
-            for key, value in ATTRIBUTES.items()
-        },
-        learning_rate=1e-3,
-        alpha=0.9,
-        learning_rate_w=5e-3
-    )
-
-    training_dataset = ARCProblemSet.load_from_data_directory('training')
-
-    def collate_fn(batch):
-        names = [item["name"] for item in batch]
-        padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, GRID_SIZE)
-        return TensorDict(
-            {
-                "name": names,
-                "embedding": None,
-                "padded_grid": padded_grids,
-                "encoded_grid": padded_grids + positional_encodings.reshape(-1, GRID_SIZE),
-                "predicted_grid": None,
-                "area": [item["meta"].area for item in batch],
-                "predicted_area": None,
-                "grid_size": [item["meta"].grid_size for item in batch],
-                "predicted_grid_size": None,
-                "num_colors": [item["meta"].num_colors for item in batch],
-                "predicted_num_colors": None,
-                "color_map": [item["meta"].color_map for item in batch],
-                "predicted_color_map": None
-            },
-            batch_size=len(batch)
-        )
-
-    train_loader = torch.utils.data.DataLoader(
-        training_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        collate_fn=collate_fn
-    )
-
-    trainer = L.Trainer(max_epochs=EPOCHS)
-    trainer.fit(model=autoencoder, train_dataloaders=train_loader)
-
-    # Take a single batch from the train_loader; print out the actuals and the predictions
-    sample_batch = next(iter(train_loader))
-    autoencoder.eval()
-    with torch.no_grad():
-        encoder_out = autoencoder.encoder(sample_batch)
-        sample_batch["embedding"] = encoder_out["embedding"]
-        decoder_out = autoencoder.decoder(sample_batch)
-        reconstructed = decoder_out["predicted_grid"]
-
-        attribute_predictions = {}
-        for attr_key in ATTRIBUTES.keys():
-            attr_head = getattr(autoencoder, f"attribute_head_{attr_key}")
-            attr_out = attr_head(sample_batch)
-            attribute_predictions[attr_key] = attr_out[f"predicted_{attr_key}"]
-        
-        sample_idx = 2
-        sample_grid_size = sample_batch["grid_size"][sample_idx].squeeze().to(torch.int32)
-        original = sample_batch["padded_grid"][sample_idx].reshape(30, 30)
-        prediction = reconstructed[sample_idx].reshape(30, 30)
-        
-        print("=== GRID RECONSTRUCTION ===")
-        print("Original grid:\n", original[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy())
-        print("Predicted grid:\n", np.round(prediction[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy()))
-        
-        print("\n=== ATTRIBUTE PREDICTIONS ===")
-        for attr_key in ATTRIBUTES.keys():
-            predicted = attribute_predictions[attr_key][sample_idx].cpu().numpy()
-            actual = sample_batch[attr_key][sample_idx]
-            if hasattr(actual, 'cpu'):
-                actual = actual.cpu().numpy()
-            
-            print(f"\n{attr_key.upper()}:")
-            print(f"  Predicted: {predicted}")
-            print(f"  Actual:    {actual}")
