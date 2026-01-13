@@ -1,0 +1,32 @@
+[model]
+grid_size = 900
+attention_sizes = [32, 64, 128]
+latent_size = 64
+hidden_attr_size = 96
+learning_rate = 0.001
+alpha = 0.9
+learning_rate_w = 0.005
+
+[training]
+batch_size = 31
+epochs = 1
+dataset_path = "training"
+
+[downstream_attributes]
+area = {hidden_size = 96, output_size = 1}
+grid_size = {hidden_size = 96, output_size = 2 }
+num_colors = { hidden_size = 96, output_size = 1}
+color_map = { hidden_size = 96, output_size = 10}
+
+[contrastive_attributes]
+area = {task_type = "task_invariant"}
+color_map = {task_type = "task_invariant"}
+reflect = {task_type = "task_invariant"}
+rotate = {task_type = "task_invariant"}
+roll = {task_type = "task_sensitive", activation = "sigmoid"}
+scale_grid = {task_type = "task_sensitive", activation = "sigmoid"}
+isolate_color = { task_type = "task_sensitive", activation = "sigmoid"}
+
+[testing]
+sample_idx = 2
+grid_display_size = 30

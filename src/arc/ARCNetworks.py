@@ -19,6 +19,8 @@ class FullyConnectedLayer(torch.nn.Module):
             self.activation = F.relu
         elif activation == 'softmax':
             self.activation = F.softmax
+        elif activation == 'sigmoid':
+            self.activation = F.sigmoid
         else:
             self.activation = lambda x: x
 
@@ -70,7 +72,7 @@ class Encoder(torch.nn.Module):
     """
     An encoder module which uses attention heads to encode input grids into a latent representation.
     """
-    def __init__(self, input_size:int=30*30, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=64):
+    def __init__(self, input_size:int=30*30, attention_sizes:list[int]=(128, 71, 64), output_size:int=64):
         super().__init__()
 
         attention_input, attention_head, attention_output = attention_sizes
@@ -99,7 +101,7 @@ class Decoder(torch.nn.Module):
     """
     A decoder module which uses attention heads to decode latent representations back into a flattened grid.
     """
-    def __init__(self, input_size:int=64, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=30*30):
+    def __init__(self, input_size:int=64, attention_sizes:list[int]=(128, 71, 64), output_size:int=30*30):
         super().__init__()
 
         attention_input, attention_head, attention_output = attention_sizes

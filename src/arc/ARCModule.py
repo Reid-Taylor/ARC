@@ -1,16 +1,16 @@
 from __future__ import annotations
 from beartype import beartype
-from typing import Dict, Union
+from beartype.typing import Dict, Union, List
 import lightning as L
 import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
+from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
 
 positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
-NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
-NetworkParameters = Dict[str, Union[list[torch.nn.Parameter], Dict[str, list[torch.nn.Parameter]]]]
+# NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
+# NetworkParameters = Dict[str, Union[List[torch.nn.Parameter], Dict[str, List[torch.nn.Parameter]]]]
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
@@ -21,7 +21,14 @@ class MultiTaskEncoder(L.LightningModule):
 
     We combine this self-supervised and supervised learning approach with contrastive, unsupervised learning to further improve the latent space representation, inspired by SimCLR and BYOL techniques.
     """
-    def __init__(self, attribute_requirements: Dict[str, AttributeHead], task_type: Dict[str, str], learning_rate:float=1e-3, alpha:float=0.85, **network_dimensions:"NetworkDimensions") -> None:
+    def __init__(
+            self, 
+            attribute_requirements: List[str], 
+            task_type: Dict[str, str], 
+            learning_rate:float=1e-3, 
+            alpha:float=0.85, 
+            **network_dimensions
+        ) -> None:
         super().__init__()
 
         network_dimension_keys = ["Encoder","Decoder","Contrastive Projection","Contrastive Predictor", "Attribute Detector", "Attribute Head"]
@@ -33,9 +40,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.online_encoder = TensorDictModule(
             Encoder(
-                input_size = network_dimensions.get("Encoder").get("input_size", 30*30),
-                attention_sizes = network_dimensions.get("Encoder").get("attention_sizes", (128, 71, 64)),
-                output_size = network_dimensions.get("Encoder").get("output_size", 64)
+                **network_dimensions["Encoder"]
             ),
             in_keys=["encoded_grid"],
             out_keys=["online_embedding"]
@@ -43,9 +48,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.online_projector = TensorDictModule(
             AttributeHead(
                 "Contrastive Projection (Online)",
-                input_size = network_dimensions.get("Contrastive Projection").get("input_size", 64),
-                hidden_size = network_dimensions.get("Contrastive Projection").get("hidden_size", 64),
-                output_size = network_dimensions.get("Contrastive Projection").get("output_size", 64)
+                **network_dimensions["Contrastive Projection"]
             ),
             in_keys=["online_embedding"],
             out_keys=["online_representation"]
@@ -53,30 +56,27 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.target_encoder = TensorDictModule(
             Encoder(
-                input_size = network_dimensions.get("Encoder").get("input_size", 30*30),
-                attention_sizes = network_dimensions.get("Encoder").get("attention_sizes", (128, 71, 64)),
-                output_size = network_dimensions.get("Encoder").get("output_size", 64)
-            ).load_state_dict(self.online_encoder.module.state_dict()),
+                **network_dimensions["Encoder"]
+            ),
             in_keys=["encoded_grid"],
             out_keys=["target_embedding"]
         )
+        self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
+        
         self.target_projector = TensorDictModule(
             AttributeHead(
                 "Contrastive Projection (Target)",
-                input_size = network_dimensions.get("Contrastive Projection").get("input_size", 64),
-                hidden_size = network_dimensions.get("Contrastive Projection").get("hidden_size", 64),
-                output_size = network_dimensions.get("Contrastive Projection").get("output_size", 64)
-            ).load_state_dict(self.online_projector.module.state_dict()),
+                **network_dimensions["Contrastive Projection"]
+            ),
             in_keys=["target_embedding"],
             out_keys=["target_representation"]
         )
+        self.target_projector.module.load_state_dict(self.online_projector.module.state_dict())
         
         self.online_predictor = TensorDictModule(
             AttributeHead(
                 "Online Predictor",
-                input_size = network_dimensions.get("Contrastive Predictor").get("input_size", 64),
-                hidden_size = network_dimensions.get("Contrastive Predictor").get("hidden_size", 64),
-                output_size = network_dimensions.get("Contrastive Projection").get("output_size", 64)
+                **network_dimensions["Contrastive Predictor"]
             ),
             in_keys=["online_representation"],
             out_keys=["predicted_target_representation"]
@@ -84,9 +84,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.decoder = TensorDictModule(
             Decoder(
-                input_size = network_dimensions.get("Decoder").get("input_size", 64),
-                attention_sizes = network_dimensions.get("Decoder").get("attention_sizes", (128, 71, 64)),
-                output_size = network_dimensions.get("Decoder").get("output_size", 30*30)
+                **network_dimensions["Decoder"]
             ),
             in_keys=["online_embedding"],
             out_keys=["predicted_grid"]
@@ -104,9 +102,7 @@ class MultiTaskEncoder(L.LightningModule):
                 setattr(self, f"attribute_detector_{key}", TensorDictModule(
                     FullyConnectedLayer(
                         name=f"attribute_{key}",
-                        input_size = network_dimensions.get("Attribute Detector").get("input_size", 64),
-                        output_size = network_dimensions.get("Attribute Detector").get("output_size", 1),
-                        activation = network_dimensions.get("Attribute Detector").get("activation", "softmax")
+                        **network_dimensions["Attribute Detector"].get(key)
                     ),
                     in_keys=["online_representation"],
                     out_keys=[f"predicted_presence_{key}"]
@@ -118,9 +114,8 @@ class MultiTaskEncoder(L.LightningModule):
             setattr(self, f"attribute_head_{key}", TensorDictModule(
                 AttributeHead(
                     "Attribute Head",
-                    input_size = network_dimensions.get("Attribute Head").get("input_size", 64),
-                    hidden_size = network_dimensions.get("Attribute Head").get("hidden_size", 64), #TODO: refactor all hidden sizes of attributeHead to be tuples for better flexibility
-                    output_size = network_dimensions.get("Attribute Head").get("output_size", 64)
+                    **network_dimensions["Attribute Head"].get(key)
+                    #TODO: refactor all hidden sizes of attributeHead to be tuples for better flexibility
                 ),
                 in_keys=["online_embedding"],
                 out_keys=[f"predicted_{key}"]
@@ -138,7 +133,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.automatic_optimization: bool = False
 
-    def _get_parameters(self) -> NetworkParameters:
+    def _get_parameters(self):
         params = {
             "online_encoder": [p for p in self.online_encoder.module.parameters() if p.requires_grad],
             "online_projector": [p for p in self.online_projector.module.parameters() if p.requires_grad],
@@ -207,7 +202,7 @@ class MultiTaskEncoder(L.LightningModule):
         # Get optimizers, forward step with batch, and call parameters
         opt_model, opt_w = self.optimizers()
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
-        all_params: NetworkParameters = self._get_parameters()
+        all_params = self._get_parameters()
 
         # Reconstruction Task Loss
         reconstruction_loss = F.mse_loss(results["predicted_grid"], batch["padded_grid"])
@@ -220,7 +215,7 @@ class MultiTaskEncoder(L.LightningModule):
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             key_to_idx[f'downstream_{key}'] = len(key_to_idx)
-            downstream_attribute_loss.append(F.mse_loss(results["predicted_downstream_attributes"][key], batch[key]))
+            downstream_attribute_loss.append(F.mse_loss(results["predicted_downstream_attributes"][key], batch[key])) #TODO: pyTest is erring out here. Let's fix the TensorDict def happening in the test file to resolve.We've added new fields recently for the contrastive learning elements which must be present in the TensorDict.
 
         # Task Sensitive Attribute Detection Loss
         task_sensitive_loss = []
