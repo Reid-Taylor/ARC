@@ -5,6 +5,27 @@ import torch
 from torch.nn import functional as F
 
 @beartype
+class FullyConnectedLayer(torch.nn.Module):
+    """
+    A fully connected layer which predicts specific attributes from the latent representation.
+    """
+    def __init__(self, name:str, input_size:int=64, output_size:int=10, activation:str='relu'):
+        super().__init__()
+        self.name:str = name
+        self.fc1 = torch.nn.Linear(input_size, output_size)
+        if activation.lower() not in ['relu', 'softmax']:
+            print(f"Warning: Unsupported activation function '{activation}'. Defaulting to identity function.")
+        if activation == 'relu':
+            self.activation = F.relu
+        elif activation == 'softmax':
+            self.activation = F.softmax
+        else:
+            self.activation = lambda x: x
+
+    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
+        return self.activation(self.fc1(x))
+
+@beartype
 class AttentionHead(torch.nn.Module):
     """
     Naive implementation of a self-attention head.
@@ -25,60 +46,7 @@ class AttentionHead(torch.nn.Module):
         attention_weights = F.softmax(scores, dim=-1)
         attended_values = torch.matmul(attention_weights, values)
         return attended_values
-
-@beartype
-class Encoder(torch.nn.Module):
-    """
-    An encoder module which uses attention heads to encode input grids into a latent representation.
-    """
-    def __init__(self, input_size:int=30*30, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=64):
-        super().__init__()
-
-        self.l1 = torch.nn.Linear(input_size, attention_sizes[0])
-
-        self.head_1 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_2 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_3 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        
-        self.fc_out = torch.nn.Linear(attention_sizes[2]*3, output_size)
-    def forward(self, x) -> Float[torch.Tensor, "B D"]:
-        encoded_input = F.relu(self.l1(x))
-
-        attended_input_1: torch.Tensor = self.head_1(encoded_input)
-        attended_input_2: torch.Tensor = self.head_2(encoded_input)
-        attended_input_3: torch.Tensor = self.head_3(F.leaky_relu(encoded_input))
-
-        attended_layers = torch.cat((attended_input_1, attended_input_2, attended_input_3), dim=-1)
-
-        return self.fc_out(attended_layers)
-
-# We need to explore what typings are available for the different layers, and sequences of layers, to provide cleaner documentation throughout this project.
-@beartype
-class Decoder(torch.nn.Module):
-    """
-    A decoder module which uses attention heads to decode latent representations back into a flattened grid.
-    """
-    def __init__(self, input_size:int=64, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=30*30):
-        super().__init__()
-
-        self.fully_connected = torch.nn.Linear(input_size, attention_sizes[0])
-
-        self.head_1 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_2 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        self.head_3 = AttentionHead(attention_sizes[0], attention_sizes[1], attention_sizes[2])
-        
-        self.fc_out = torch.nn.Linear(attention_sizes[2]*3, output_size)
-    def forward(self, x) -> Float[torch.Tensor, "B 900"]:
-        attended_input = self.fully_connected(x)
-
-        input_1: torch.Tensor = self.head_1(attended_input)
-        input_2: torch.Tensor = self.head_2(attended_input)
-        input_3: torch.Tensor = self.head_3(attended_input)
-
-        attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
-
-        return self.fc_out(attended_layers)
-
+    
 @beartype
 class AttributeHead(torch.nn.Module):
     """
@@ -96,3 +64,60 @@ class AttributeHead(torch.nn.Module):
         x = self.attention(x)
         x = self.fc2(x)
         return x
+
+@beartype
+class Encoder(torch.nn.Module):
+    """
+    An encoder module which uses attention heads to encode input grids into a latent representation.
+    """
+    def __init__(self, input_size:int=30*30, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=64):
+        super().__init__()
+
+        attention_input, attention_head, attention_output = attention_sizes
+
+        self.l1 = torch.nn.Linear(input_size, attention_input)
+
+        self.head_1 = AttentionHead(attention_input, attention_head, attention_output)
+        self.head_2 = AttentionHead(attention_input, attention_head, attention_output)
+        self.head_3 = AttentionHead(attention_input, attention_head, attention_output)
+        
+        self.fc_out = torch.nn.Linear(attention_output*3, output_size)
+
+    def forward(self, x) -> Float[torch.Tensor, "B D"]:
+        encoded_input = F.relu(self.l1(x))
+
+        attended_input_1: torch.Tensor = self.head_1(encoded_input)
+        attended_input_2: torch.Tensor = self.head_2(encoded_input)
+        attended_input_3: torch.Tensor = self.head_3(F.leaky_relu(encoded_input))
+
+        attended_layers = torch.cat((attended_input_1, attended_input_2, attended_input_3), dim=-1)
+
+        return self.fc_out(attended_layers)
+
+@beartype
+class Decoder(torch.nn.Module):
+    """
+    A decoder module which uses attention heads to decode latent representations back into a flattened grid.
+    """
+    def __init__(self, input_size:int=64, attention_sizes:tuple[int, int, int]=(128, 71, 64), output_size:int=30*30):
+        super().__init__()
+
+        attention_input, attention_head, attention_output = attention_sizes
+
+        self.fully_connected = torch.nn.Linear(input_size, attention_input)
+
+        self.head_1 = AttentionHead(attention_input, attention_head, attention_output)
+        self.head_2 = AttentionHead(attention_input, attention_head, attention_output)
+        self.head_3 = AttentionHead(attention_input, attention_head, attention_output)
+        
+        self.fc_out = torch.nn.Linear(attention_output*3, output_size)
+    def forward(self, x) -> Float[torch.Tensor, "B 900"]:
+        attended_input = self.fully_connected(x)
+
+        input_1: torch.Tensor = self.head_1(attended_input)
+        input_2: torch.Tensor = self.head_2(attended_input)
+        input_3: torch.Tensor = self.head_3(attended_input)
+
+        attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
+
+        return self.fc_out(attended_layers)

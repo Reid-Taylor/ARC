@@ -10,11 +10,13 @@ from ARCDataClasses import ARCGrid
 
 AUGMENTATIONS =  ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
 
+#TODO: We should include the augmentation of "add random noise" where we randomly change a very small number of 0-valued grid cells to random colors.
+
 @beartype
 class AugmentationConfig:
-    num_augmentations: int = 7
+    num_augmentations: int = 4
     augmentation_set: list[str]
-    def __init__(self, num_augmentations: int = 7) -> None:
+    def __init__(self, num_augmentations: int = 4) -> None:
         self.num_augmentations = num_augmentations
         augmentation_set = self._augmentation_set()
         augmentation_probabilities = self._get_augmentation_probabilities()
@@ -27,7 +29,7 @@ class AugmentationConfig:
         return torch.rand(self.num_augmentations) >= 0.5
     
     def __str__(self) -> str:
-        return f"AugmentationConfig(num_augmentations={self.len(self.augmentation_set)}) of [{', '.join(self.augmentation_set)}]"
+        return f"AugmentationConfig(num_augmentations={len(self.augmentation_set)}) of [{', '.join(self.augmentation_set)}]"
 
 @dataclass
 @beartype

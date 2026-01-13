@@ -1,14 +1,16 @@
 from __future__ import annotations
 from beartype import beartype
-from typing import Dict
+from typing import Dict, Union
 import lightning as L
 import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from arc.ARCNetworks import Encoder, Decoder, AttributeHead
+from ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
 
 positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
+NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
+NetworkParameters = Dict[str, Union[list[torch.nn.Parameter], Dict[str, list[torch.nn.Parameter]]]]
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
@@ -19,45 +21,80 @@ class MultiTaskEncoder(L.LightningModule):
 
     We combine this self-supervised and supervised learning approach with contrastive, unsupervised learning to further improve the latent space representation, inspired by SimCLR and BYOL techniques.
     """
-    def __init__(self, encoder:"Encoder", decoder:"Decoder", attribute_requirements: Dict[str, AttributeHead], task_type: Dict[str, str], learning_rate:float=1e-3, alpha:float=0.85) -> None:
+    def __init__(self, attribute_requirements: Dict[str, AttributeHead], task_type: Dict[str, str], learning_rate:float=1e-3, alpha:float=0.85, **network_dimensions:"NetworkDimensions") -> None:
         super().__init__()
 
+        network_dimension_keys = ["Encoder","Decoder","Contrastive Projection","Contrastive Predictor", "Attribute Detector", "Attribute Head"]
+
+        if network_dimensions is None:
+            network_dimensions = {x:{} for x in network_dimension_keys}
+        else: 
+            assert [x in network_dimensions for x in network_dimension_keys] #TODO: I need better content control over these dictionaries, and the default get options makes me sad from a cleanliness and centralization standpoint. Should we default to a saved pickle of a standard dictionary if the given dictionary doesn't pass the validations enforced on (nested) keys?
+
         self.online_encoder = TensorDictModule(
-            encoder,
+            Encoder(
+                input_size = network_dimensions.get("Encoder").get("input_size", 30*30),
+                attention_sizes = network_dimensions.get("Encoder").get("attention_sizes", (128, 71, 64)),
+                output_size = network_dimensions.get("Encoder").get("output_size", 64)
+            ),
             in_keys=["encoded_grid"],
             out_keys=["online_embedding"]
         )
         self.online_projector = TensorDictModule(
-            None, #TODO: Define this
+            AttributeHead(
+                "Contrastive Projection (Online)",
+                input_size = network_dimensions.get("Contrastive Projection").get("input_size", 64),
+                hidden_size = network_dimensions.get("Contrastive Projection").get("hidden_size", 64),
+                output_size = network_dimensions.get("Contrastive Projection").get("output_size", 64)
+            ),
             in_keys=["online_embedding"],
             out_keys=["online_representation"]
         )
 
         self.target_encoder = TensorDictModule(
-            None, # encoder #TODO: Define this differently to not share weights
+            Encoder(
+                input_size = network_dimensions.get("Encoder").get("input_size", 30*30),
+                attention_sizes = network_dimensions.get("Encoder").get("attention_sizes", (128, 71, 64)),
+                output_size = network_dimensions.get("Encoder").get("output_size", 64)
+            ).load_state_dict(self.online_encoder.module.state_dict()),
             in_keys=["encoded_grid"],
             out_keys=["target_embedding"]
         )
         self.target_projector = TensorDictModule(
-            None, #TODO: Define this
+            AttributeHead(
+                "Contrastive Projection (Target)",
+                input_size = network_dimensions.get("Contrastive Projection").get("input_size", 64),
+                hidden_size = network_dimensions.get("Contrastive Projection").get("hidden_size", 64),
+                output_size = network_dimensions.get("Contrastive Projection").get("output_size", 64)
+            ).load_state_dict(self.online_projector.module.state_dict()),
             in_keys=["target_embedding"],
             out_keys=["target_representation"]
         )
         
         self.online_predictor = TensorDictModule(
-            None, #TODO: Define this
+            AttributeHead(
+                "Online Predictor",
+                input_size = network_dimensions.get("Contrastive Predictor").get("input_size", 64),
+                hidden_size = network_dimensions.get("Contrastive Predictor").get("hidden_size", 64),
+                output_size = network_dimensions.get("Contrastive Projection").get("output_size", 64)
+            ),
             in_keys=["online_representation"],
             out_keys=["predicted_target_representation"]
         )
 
         self.decoder = TensorDictModule(
-            decoder,
+            Decoder(
+                input_size = network_dimensions.get("Decoder").get("input_size", 64),
+                attention_sizes = network_dimensions.get("Decoder").get("attention_sizes", (128, 71, 64)),
+                output_size = network_dimensions.get("Decoder").get("output_size", 30*30)
+            ),
             in_keys=["online_embedding"],
             out_keys=["predicted_grid"]
         )
 
         self.task_invariants: list[str] = []
         self.task_sensitives: list[str] = []
+        self.downstream_attributes: list[str] = attribute_requirements
 
         for key, value in task_type.items():
             if value == "task_invariant":
@@ -65,11 +102,11 @@ class MultiTaskEncoder(L.LightningModule):
             elif value == "task_sensitive":
                 self.task_sensitives.append(key)
                 setattr(self, f"attribute_detector_{key}", TensorDictModule(
-                    AttributeHead(
+                    FullyConnectedLayer(
                         name=f"attribute_{key}",
-                        input_dim=encoder.output_size,
-                        hidden_dim=encoder.output_size,
-                        output_dim=encoder.output_size
+                        input_size = network_dimensions.get("Attribute Detector").get("input_size", 64),
+                        output_size = network_dimensions.get("Attribute Detector").get("output_size", 1),
+                        activation = network_dimensions.get("Attribute Detector").get("activation", "softmax")
                     ),
                     in_keys=["online_representation"],
                     out_keys=[f"predicted_presence_{key}"]
@@ -77,29 +114,53 @@ class MultiTaskEncoder(L.LightningModule):
             else: 
                 raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
-
-        for key, value in attribute_requirements.items():
+        for key in attribute_requirements:
             setattr(self, f"attribute_head_{key}", TensorDictModule(
-                value,
+                AttributeHead(
+                    "Attribute Head",
+                    input_size = network_dimensions.get("Attribute Head").get("input_size", 64),
+                    hidden_size = network_dimensions.get("Attribute Head").get("hidden_size", 64), #TODO: refactor all hidden sizes of attributeHead to be tuples for better flexibility
+                    output_size = network_dimensions.get("Attribute Head").get("output_size", 64)
+                ),
                 in_keys=["online_embedding"],
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.downstream_attributes: dict[str, AttributeHead] = attribute_requirements
-
+        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_invariants)
+        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + task invariant attribute tasks
+        
         self.lr: float = learning_rate
-
-        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(2)) # TODO: Update for more than 2 tasks
+        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.alpha: float = alpha
 
-        self.register_buffer("L0", torch.zeros(2)) # TODO: Update for more than 2 tasks
+        self.register_buffer("L0", torch.zeros(self.num_tasks))
         self.L0_initialized: bool = False
 
         self.automatic_optimization: bool = False
 
-    def _task_weights(self) -> Float[torch.Tensor, "A"]:  # TODO: Update for more than 2 tasks
+    def _get_parameters(self) -> NetworkParameters:
+        params = {
+            "online_encoder": [p for p in self.online_encoder.module.parameters() if p.requires_grad],
+            "online_projector": [p for p in self.online_projector.module.parameters() if p.requires_grad],
+            "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
+            "target_encoder": [p for p in self.target_encoder.module.parameters() if p.requires_grad],
+            "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
+            "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
+            "attribute_heads": {
+                key: [p for p in getattr(self, f"attribute_head_{key}").module.parameters() if p.requires_grad]
+                for key in self.downstream_attributes
+            },
+            "attribute_detectors": {
+                key: [p for p in getattr(self, f"attribute_detector_{key}").module.parameters() if p.requires_grad]
+                for key in self.task_sensitives
+            }
+        }
+        return params
+
+    def _task_weights(self) -> Float[torch.Tensor, "A"]:
+        #TODO: consider weighting across reconstruction?
         w = F.softmax(self.raw_w, dim=0) + 1e-8
-        w = 2 * w / w.sum()
+        w = self.num_tasks * w / w.sum()
         return w
     
     def forward(self, x) -> Dict[str, Float[torch.Tensor, "..."]]:
@@ -111,7 +172,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         # Predict attributes from embedding
         y_hat = {}
-        for key in self.downstream_attributes.keys():
+        for key in self.downstream_attributes:
             y_hat[key] = getattr(self, f"attribute_head_{key}")(z)
 
         # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
@@ -124,6 +185,7 @@ class MultiTaskEncoder(L.LightningModule):
         # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 
+        # Predict task-sensitive attributes from our contrastive representation. We want to discriminate these well, to enforce structure upon our latent space.
         attribute_detections = {}
         for key in self.task_sensitives:
             attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
@@ -141,19 +203,40 @@ class MultiTaskEncoder(L.LightningModule):
 
         return results
 
-    def training_step(self, batch): # TODO: Update for more than 2 tasks
-
+    def training_step(self, batch):
+        # Get optimizers, forward step with batch, and call parameters
         opt_model, opt_w = self.optimizers()
+        results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
+        all_params: NetworkParameters = self._get_parameters()
 
-        results = self.forward(batch)
-
+        # Reconstruction Task Loss
         reconstruction_loss = F.mse_loss(results["predicted_grid"], batch["padded_grid"])
-        attribute_loss = 0.0
-        for key in self.downstream_attributes.keys():
-            attribute_loss += F.mse_loss(results["predicted_downstream_attributes"][key], batch[key])
 
-        loss = torch.stack([reconstruction_loss, attribute_loss])
+        key_to_idx = {
+            'reconstruction_loss':0
+        }
 
+        # Downstream Attribute Recovery Task Loss
+        downstream_attribute_loss = []
+        for key in self.downstream_attributes:
+            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
+            downstream_attribute_loss.append(F.mse_loss(results["predicted_downstream_attributes"][key], batch[key]))
+
+        # Task Sensitive Attribute Detection Loss
+        task_sensitive_loss = []
+        for key in self.task_sensitives:
+            key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
+            task_sensitive_loss.append(F.binary_cross_entropy(results["predicted_task_sensitive_attributes"][key], batch[f"presence_{key}"]))
+        
+        # Task Invariant Loss
+        task_invariant_loss = []
+        for key in self.task_invariants:
+            key_to_idx[f'invariant_{key}'] = len(key_to_idx)
+            task_invariant_loss.append(F.mse_loss(results["online_representation"], results["target_representation"].detach()))
+
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+
+        # Initialize L0 if not already done
         if (not self.L0_initialized):
             self.L0[:] = loss.detach()
             self.L0_initialized = True
@@ -161,42 +244,62 @@ class MultiTaskEncoder(L.LightningModule):
         else:
             L0_for_computation = self.L0
 
+        # Get task weights. Compute gradient norms for each task
         w = self._task_weights()
-
-        encoder_params = [p for p in self.encoder.module.parameters() if p.requires_grad]
-        decoder_params = [p for p in self.decoder.module.parameters() if p.requires_grad]
-        attr_params = [
-                [
-                    p for key in self.downstream_attributes.keys()
-                    for p in getattr(self, f"attribute_head_{key}").module.parameters()
-                    if p.requires_grad
-                ]
-            ]
-        
-        W_reconstruction = encoder_params + decoder_params
-
         G = []
         loss_total = torch.sum((w * loss))
         
-        grads_0 = torch.autograd.grad(w[0] * loss[0], W_reconstruction, retain_graph=True, create_graph=True, allow_unused=True)
+        # Reconstruction task gradient norm
+        grads_0 = torch.autograd.grad(w[0] * loss[0], all_params.get("online_encoder") + all_params.get("decoder"), retain_graph=True, create_graph=True, allow_unused=True)
         grads_0 = [g for g in grads_0 if g is not None]
         if grads_0:
-            gnorm_0 = torch.norm(torch.stack([g.norm() for g in grads_0]), 2)
+            G.append(torch.norm(torch.stack([g.norm() for g in grads_0]), 2))
         else:
-            gnorm_0 = torch.tensor(0.0, device=loss.device, requires_grad=True)
-        G.append(gnorm_0)
+            G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
         
-        for attribute in attr_params:
-            W_attribute = encoder_params + attribute
-            grads_1 = None
-            grads_1 = torch.autograd.grad(w[1] * loss[1], W_attribute, retain_graph=True, create_graph=True, allow_unused=True)
+        # Attribute prediction tasks gradient norms
+        for attribute in self.downstream_attributes:
+            W_attribute = all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
+            grads_1 = torch.autograd.grad(
+                w[key_to_idx.get(f"downstream_{key}")] * loss[key_to_idx.get(f"downstream_{key}")], 
+                W_attribute, 
+                retain_graph=True, create_graph=True, allow_unused=True
+            )
             grads_1 = [g for g in grads_1 if g is not None]
             if grads_1:
-                gnorm_1 = torch.norm(torch.stack([g.norm() for g in grads_1]), 2)
+                G.append(gradNorm_1 = torch.norm(torch.stack([g.norm() for g in grads_1]), 2))
             else:
-                gnorm_1 = torch.tensor(0.0, device=loss.device, requires_grad=True)
-            G.append(gnorm_1)
+                G.append(gradNorm_1 = torch.tensor(0.0, device=loss.device, requires_grad=True))
         
+        # Attribute detection tasks gradient norms
+        for key in self.task_sensitives:
+            W_detection = all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
+            grads_2 = torch.autograd.grad(
+                w[key_to_idx.get(f"sensitive{key}")] * loss[key_to_idx.get(f"sensitive{key}")], 
+                W_detection, 
+                retain_graph=True, create_graph=True, allow_unused=True
+            )
+            grads_2 = [g for g in grads_2 if g is not None]
+            if grads_2:
+                G.append(torch.norm(torch.stack([g.norm() for g in grads_2]), 2))
+            else:
+                G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
+        
+        # Attribute invariant tasks gradient norms
+        for key in self.task_invariants:
+            W_invariant = all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
+            grads_3 = torch.autograd.grad(
+                w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
+                W_invariant, 
+                retain_graph=True, create_graph=True, allow_unused=True
+            )
+            grads_3 = [g for g in grads_3 if g is not None]
+            if grads_3:
+                G.append(torch.norm(torch.stack([g.norm() for g in grads_3]), 2))
+            else:
+                G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
+        
+        # Compute mean gradient norm
         G = torch.stack(G)
         mean_G = G.mean()
 
@@ -206,41 +309,48 @@ class MultiTaskEncoder(L.LightningModule):
         
         loss_grad = torch.sum(torch.abs(G - target_G))
 
+        # Update parameters
         opt_model.zero_grad()
         opt_w.zero_grad()
 
         loss_total.backward(retain_graph=True)
-
         loss_grad.backward()
 
         opt_model.step()
         opt_w.step()
 
+        # Manually update target network with exponential moving average of online network. 
+        tau = 0.95
+        for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
+            param_t.data = tau * param_t.data + (1 - tau) * param_o.data
+        for param_o, param_t in zip(all_params.get("online_projector"), all_params.get("target_projector")):
+            param_t.data = tau * param_t.data + (1 - tau) * param_o.data
+
+        # Log metrics and updates
         self.log_dict(
             {
                 "train/reconstruction_loss": reconstruction_loss,
-                "train/attribute_loss": attribute_loss,
+                "train/downstream_attribute_loss": downstream_attribute_loss,
+                "train/task_sensitive_loss": task_sensitive_loss,
                 "train/total_loss": loss_total.detach(),
                 "train/loss_grad": loss_grad.detach(),
-                "train/task_weight_reconstruction": w[0].detach(),
-                "train/task_weight_attribute": w[1].detach(),
-                "train/task_gradient_reconstruction": G[0].detach(),
-                "train/task_gradient_attribute": G[1].detach(),
             },
             prog_bar=True
         )
 
     def configure_optimizers(self):
+        params = self._get_parameters()
+
         opt_model = torch.optim.Adam(
-            [p for p in self.encoder.module.parameters() if p.requires_grad] + 
-            [p for p in self.decoder.module.parameters() if p.requires_grad] + 
-            [
-                *[
-                    p for key in self.attributes.keys()
-                    for p in getattr(self, f"attribute_head_{key}").module.parameters()
-                    if p.requires_grad
-                ]
-            ],
+            params = (
+                params.get("online_encoder") + 
+                params.get("decoder") + 
+                params.get("online_projector") + 
+                params.get("online_predictor") + 
+                [parameter for each in params.get("attribute_heads").values() for parameter in each] + 
+                [parameter for each in params.get("attribute_detectors").values() for parameter in each]
+            )
+            ,
             lr=self.lr
         )
         opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)

@@ -20,3 +20,6 @@ dependencies = [
     "torchvision>=0.24.1",
     "tqdm>=4.67.1",
 ]
+
+[tool.ruff]
+lint.ignore = ["F722"] # Ignores F722 everywhere
