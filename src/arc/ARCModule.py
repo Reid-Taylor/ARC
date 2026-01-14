@@ -31,13 +31,6 @@ class MultiTaskEncoder(L.LightningModule):
         ) -> None:
         super().__init__()
 
-        network_dimension_keys = ["Encoder","Decoder","Contrastive Projection","Contrastive Predictor", "Attribute Detector", "Attribute Head"]
-
-        if network_dimensions is None:
-            network_dimensions = {x:{} for x in network_dimension_keys}
-        else: 
-            assert [x in network_dimensions for x in network_dimension_keys] #TODO: I need better content control over these dictionaries, and the default get options makes me sad from a cleanliness and centralization standpoint. Should we default to a saved pickle of a standard dictionary if the given dictionary doesn't pass the validations enforced on (nested) keys?
-
         self.online_encoder = TensorDictModule(
             Encoder(
                 **network_dimensions["Encoder"]
