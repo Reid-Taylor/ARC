@@ -1,8 +1,6 @@
 from __future__ import annotations
 from typing import Union
-
 from beartype.typing import Optional
-
 from json import JSONDecoder
 from dataclasses import dataclass
 import torch
@@ -12,8 +10,33 @@ from jaxtyping import Int, Float
 from tensordict import tensorclass
 from beartype import beartype
 
+from random import sample
+
 C: int = 10 # Number of colors in ARC grids (0-9)
 BATCH_SIZE:int = 1
+AUGMENTATIONS =  ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
+
+@beartype
+class AugmentationConfig:
+    num_augmentations: int = 4
+    augmentation_set: list[str]
+    def __init__(self, num_augmentations: int = 4) -> None:
+        self.num_augmentations = num_augmentations
+        augmentation_set = self._augmentation_set()
+        augmentation_probabilities = self._get_augmentation_probabilities()
+        self.augmentation_set: list[str] = [aug for aug, prob in zip(augmentation_set, augmentation_probabilities) if prob]
+
+    def _augmentation_set(self) -> list[str]:
+        return sample(AUGMENTATIONS, counts=[10] * len(AUGMENTATIONS),k=self.num_augmentations)
+    
+    def _get_augmentation_probabilities(self) -> torch.Tensor:
+        return torch.rand(self.num_augmentations) >= 0.5
+    
+    def __str__(self) -> str:
+        return f"AugmentationConfig(num_augmentations={len(self.augmentation_set)}) of [{', '.join(self.augmentation_set)}]"
+    
+    def __iter__(self):
+        yield self.augmentation_set
 
 @tensorclass
 @beartype
@@ -52,6 +75,9 @@ class ARCGridMeta:
 class ARCGrid:
     name:str 
     grid: Int[torch.Tensor, "1 H W"]
+    augmentation_config: AugmentationConfig
+    augmented_grid: Int[torch.Tensor, "1 H W"]
+    padded_augmented_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
     padded_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
     meta: Optional[ARCGridMeta]=None
     attributes: Optional[Int[torch.Tensor, "1 _"]] = None
@@ -62,6 +88,16 @@ class ARCGrid:
     def __init__(self, name:str, values:Union[list[list[int]], torch.Tensor]) -> None:
         self.name:str = name
         self.grid: Int[torch.Tensor, "1 H W"] = torch.tensor(values, dtype=torch.int8).unsqueeze(0)
+        self.augmentation_config = AugmentationConfig()
+        self.augmented_grid: Int[torch.Tensor, "1 H W"] = self.grid.detach().clone()
+        self.augment_grid()
+        augmented_shape = self.augmented_grid.shape
+
+        self.padded_augmented_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.augmented_grid,
+            pad=(0,30 - augmented_shape[2],0,30 - augmented_shape[1]),
+            mode='constant', 
+            value= -1
+            ).to(torch.float32)
 
         self.padded_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
             pad=(0,30 - len(values[0]),0,30 - len(values)),
@@ -73,7 +109,96 @@ class ARCGrid:
 
         self.attributes: Int[torch.Tensor, "1 _"] = self.meta._to_tensor()
 
-        self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None  # Placeholder for learned embedding
+        self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None
+
+    def augment_grid(self) -> None:
+        for aug in self.augmentation_config.augmentation_set:
+            if aug == "color_map":
+                self._apply_color_map()
+            elif aug == "roll":
+                self._apply_roll()
+            elif aug == "reflect":
+                self._apply_reflect()
+            elif aug == "rotate":
+                self._apply_rotate()
+            elif aug == "scale_grid":
+                self._apply_scale_grid()
+            elif aug == "isolate_color":
+                self._apply_isolate_color()
+    
+    @beartype
+    def _apply_color_map(self) -> None:
+        color_map_tensor = torch.randperm(10, dtype=torch.int8)
+
+        self.augmented_grid = color_map_tensor[self.augmented_grid.long()]
+    
+    @beartype
+    def _apply_roll(self) -> None:
+        original_grid = self.augmented_grid.squeeze(0)
+
+        new_grid = torch.roll(
+            original_grid, 
+            shifts=(
+                torch.randint(0, original_grid.shape[0], (1,)).item(), torch.randint(0, original_grid.shape[1], (1,)).item()
+            ), 
+            dims=(0,1)
+        )
+
+        self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
+
+    
+    @beartype
+    def _apply_reflect(self) -> None:
+        original_grid = self.augmented_grid.squeeze(0)
+
+        if torch.rand(1).item() > 0.5:
+            new_grid = torch.flip(original_grid, dims=[0])
+        else:
+            new_grid = torch.flip(original_grid, dims=[1])
+        
+        self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
+    
+    @beartype
+    def _apply_rotate(self):
+        original_grid = self.augmented_grid.squeeze(0)
+
+        k = torch.randint(1, 4, (1,)).item() 
+        new_grid = torch.rot90(original_grid, k=k, dims=(0, 1))
+
+        self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
+
+    @beartype
+    def _apply_scale_grid(self):
+        original_grid = self.augmented_grid.squeeze(0)
+        
+        current_height, current_width = original_grid.shape
+        
+        max_rows_to_add = max(0, 30 - current_height)
+        max_cols_to_add = max(0, 30 - current_width)
+        
+        rows_to_add = torch.randint(0, max_rows_to_add + 1, (1,)).item()
+        cols_to_add = torch.randint(0, max_cols_to_add + 1, (1,)).item()
+        
+        new_grid = torch.nn.functional.pad(original_grid, 
+                                           (0, cols_to_add, 0, rows_to_add), 
+                                           mode='constant', value=0)
+        
+        self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
+    
+    @beartype
+    def _apply_isolate_color(self):
+        original_grid = self.augmented_grid.squeeze(0)
+
+        unique_colors = torch.unique(original_grid)
+        
+        if len(unique_colors) > 1:
+            color_to_isolate = unique_colors[torch.randint(1, len(unique_colors), (1,)).item()]
+            
+            new_grid = torch.where(original_grid == color_to_isolate, original_grid, torch.tensor(0, dtype=original_grid.dtype))
+        else: 
+            new_grid = original_grid.clone()
+
+        self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
 
 @dataclass
 class ARCExample:
@@ -126,7 +251,8 @@ class ARCProblemSet:
                     "embedding": grid.embedding.squeeze(0) if grid.embedding is not None else None,
                     "meta": grid.meta,
                     "attributes": grid.attributes.squeeze(0) if grid.attributes is not None else None,
-                    # add other fields as needed
+                    "augmentation_set": grid.augmentation_config,
+                    "augmented_grid": grid.padded_augmented_grid
                 })
         return samples
     

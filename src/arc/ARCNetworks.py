@@ -13,7 +13,7 @@ class FullyConnectedLayer(torch.nn.Module):
         super().__init__()
         self.name:str = name
         self.fc1 = torch.nn.Linear(input_size, output_size)
-        if activation.lower() not in ['relu', 'softmax']:
+        if activation.lower() not in ['relu', 'softmax','sigmoid']:
             print(f"Warning: Unsupported activation function '{activation}'. Defaulting to identity function.")
         if activation == 'relu':
             self.activation = F.relu

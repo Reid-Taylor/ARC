@@ -197,7 +197,7 @@ class MultiTaskEncoder(L.LightningModule):
         }
 
         return results
-
+    
     def training_step(self, batch):
         # Get optimizers, forward step with batch, and call parameters
         opt_model, opt_w = self.optimizers()
@@ -215,19 +215,35 @@ class MultiTaskEncoder(L.LightningModule):
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             key_to_idx[f'downstream_{key}'] = len(key_to_idx)
-            downstream_attribute_loss.append(F.mse_loss(results["predicted_downstream_attributes"][key], batch[key])) #TODO: pyTest is erring out here. Let's fix the TensorDict def happening in the test file to resolve.We've added new fields recently for the contrastive learning elements which must be present in the TensorDict.
+            downstream_attribute_loss.append(
+                F.mse_loss(
+                    results["predicted_downstream_attributes"][key],
+                    batch[key]
+                )
+            ) 
 
         # Task Sensitive Attribute Detection Loss
         task_sensitive_loss = []
         for key in self.task_sensitives:
             key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
-            task_sensitive_loss.append(F.binary_cross_entropy(results["predicted_task_sensitive_attributes"][key], batch[f"presence_{key}"]))
+            print()
+            task_sensitive_loss.append(
+                F.binary_cross_entropy(
+                    results["predicted_task_sensitive_attributes"][key], 
+                    batch[f"presence_{key}"]
+                )
+            )
         
         # Task Invariant Loss
         task_invariant_loss = []
         for key in self.task_invariants:
             key_to_idx[f'invariant_{key}'] = len(key_to_idx)
-            task_invariant_loss.append(F.mse_loss(results["online_representation"], results["target_representation"].detach()))
+            task_invariant_loss.append(
+                F.mse_loss(
+                    results["online_representation"], 
+                    results["target_representation"].detach()
+                )
+            )
 
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
 
@@ -256,21 +272,21 @@ class MultiTaskEncoder(L.LightningModule):
         for attribute in self.downstream_attributes:
             W_attribute = all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
             grads_1 = torch.autograd.grad(
-                w[key_to_idx.get(f"downstream_{key}")] * loss[key_to_idx.get(f"downstream_{key}")], 
+                w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
                 W_attribute, 
                 retain_graph=True, create_graph=True, allow_unused=True
             )
             grads_1 = [g for g in grads_1 if g is not None]
             if grads_1:
-                G.append(gradNorm_1 = torch.norm(torch.stack([g.norm() for g in grads_1]), 2))
+                G.append(torch.norm(torch.stack([g.norm() for g in grads_1]), 2))
             else:
-                G.append(gradNorm_1 = torch.tensor(0.0, device=loss.device, requires_grad=True))
+                G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
         
         # Attribute detection tasks gradient norms
         for key in self.task_sensitives:
             W_detection = all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
             grads_2 = torch.autograd.grad(
-                w[key_to_idx.get(f"sensitive{key}")] * loss[key_to_idx.get(f"sensitive{key}")], 
+                w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")], 
                 W_detection, 
                 retain_graph=True, create_graph=True, allow_unused=True
             )
@@ -324,9 +340,6 @@ class MultiTaskEncoder(L.LightningModule):
         # Log metrics and updates
         self.log_dict(
             {
-                "train/reconstruction_loss": reconstruction_loss,
-                "train/downstream_attribute_loss": downstream_attribute_loss,
-                "train/task_sensitive_loss": task_sensitive_loss,
                 "train/total_loss": loss_total.detach(),
                 "train/loss_grad": loss_grad.detach(),
             },
