@@ -14,13 +14,13 @@ from random import sample
 
 C: int = 10 # Number of colors in ARC grids (0-9)
 BATCH_SIZE:int = 1
-AUGMENTATIONS =  ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
+AUGMENTATIONS: list[str] = ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
 
 @beartype
 class AugmentationConfig:
-    num_augmentations: int = 4
+    num_augmentations: int = 3
     augmentation_set: list[str]
-    def __init__(self, num_augmentations: int = 4) -> None:
+    def __init__(self, num_augmentations: int = 3) -> None:
         self.num_augmentations = num_augmentations
         augmentation_set = self._augmentation_set()
         augmentation_probabilities = self._get_augmentation_probabilities()
@@ -282,7 +282,3 @@ class ARCProblemSet:
             yield "example", f"{idx}", example.output
         yield "task", "challenge", self.challenge
         yield "task", "solution", self.solution
-
-if __name__ == "__main__":
-    x= ARCProblemSet.load_from_data_directory('training')
-    # print(x[0].get("attributes").shape)

@@ -6,14 +6,9 @@ import sys
 from pathlib import Path
 from tensordict import TensorDict
 
-# Add the project root to Python path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-print("Current working directory:", Path.cwd())
-print("Project root:", project_root)
-
-# Now import with correct paths
 from src.arc.config_loader import load_config, parse_args
 from src.arc.ARCDataClasses import ARCProblemSet
 from src.arc.ARCModule import MultiTaskEncoder, positional_encodings
