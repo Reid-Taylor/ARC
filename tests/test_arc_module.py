@@ -11,7 +11,7 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config, parse_args
 from src.arc.ARCDataClasses import ARCProblemSet
-from src.arc.ARCModule import MultiTaskEncoder, positional_encodings
+from arc.ARCEncoder import MultiTaskEncoder, positional_encodings
 
 class TestARCModule:
     @pytest.fixture
