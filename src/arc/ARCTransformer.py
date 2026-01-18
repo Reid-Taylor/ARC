@@ -197,8 +197,7 @@ class TransformationDescriber(L.LightningModule):
             identic_loss += (
                 F.mse_loss(
                     x,
-                    torch.zeros_like(x),
-                    dim=-1
+                    torch.zeros_like(x)
                 )
             )
 
