@@ -12,7 +12,7 @@ from beartype import beartype
 
 from random import sample
 
-C: int = 10 # Number of colors in ARC grids (0-9)
+C: int = 10
 BATCH_SIZE:int = 1
 AUGMENTATIONS: list[str] = ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
 

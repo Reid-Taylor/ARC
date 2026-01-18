@@ -222,33 +222,29 @@ class TestARCTransformer:
     def dataloader(self, config):
         training_config = config['training']['transformer']
         shared_training_config = config['training']['shared']
-        model_config = config['model']
         
-        all_problems = ARCProblemSet.load_from_data_directory(shared_training_config['dataset_path'])['list_of_problems']
+        all_tensordicts = ARCProblemSet.load_from_data_directory(shared_training_config['dataset_path'])['list_of_tensordicts']
         
         def collate_fn(batch):
-            names = [item["name"] for item in batch]
-            examples = [item["examples"] for item in batch]
-            input_examples = [item["input_examples"] for item in batch]
-            output_examples = [item["output_examples"] for item in batch]
-            challenge = [item["challenge"] for item in batch]
-            solution = [item["solution"] for item in batch]
+            names = torch.stack([item["problem_name"] for item in batch])
+            num_examples = torch.stack([item["num_examples"] for item in batch])
+            examples = torch.stack([item["examples"] for item in batch])
+            challenge = torch.stack([item["challenge"] for item in batch])
+            solution = torch.stack([item["solution"] for item in batch])
             
             return TensorDict(
                 {
                     "name": names,
-
-                    "online_embedding": None,
-                    "online_embedding": None,
-                    "online_embedding": None,
-                    "online_embedding": None,
-                    "online_embedding": None,
+                    "num_examples": num_examples,
+                    "examples": examples,
+                    "challenge": challenge,
+                    "solution": solution,
                 },
                 batch_size=len(batch)
             )
         
         return torch.utils.data.DataLoader(
-            all_problems,
+            all_tensordicts,
             batch_size=training_config['batch_size'],
             shuffle=True,
             collate_fn=collate_fn,
@@ -272,40 +268,6 @@ class TestARCTransformer:
             decoder_out = model.decoder(sample_batch)
             reconstructed = decoder_out["predicted_grid"]
             
-            # Attribute predictions
-            attribute_predictions = {}
-            for attr_key in config['downstream_attributes'].keys():
-                attr_head = getattr(model, f"attribute_head_{attr_key}")
-                attr_out = attr_head(sample_batch)
-                attribute_predictions[attr_key] = attr_out[f"predicted_{attr_key}"]
-                        
-            # Optional: Print results for manual inspection
-            self._print_results(sample_batch, reconstructed, attribute_predictions, config)
-    
-    def _print_results(self, sample_batch, reconstructed, attribute_predictions, config):
-        """Print reconstruction and attribute prediction results."""
-        sample_idx = config['testing']['sample_idx']
-        grid_size = config['testing']['grid_display_size']
-        
-        sample_grid_size = sample_batch["grid_size"][sample_idx].squeeze().to(torch.int32)
-        original = sample_batch["padded_grid"][sample_idx].reshape(grid_size, grid_size)
-        prediction = reconstructed[sample_idx].reshape(grid_size, grid_size)
-        
-        print("=== GRID RECONSTRUCTION ===")
-        print("Original grid:\n", original[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy())
-        print("Predicted grid:\n", np.round(prediction[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy()))
-        
-        print("\n=== ATTRIBUTE PREDICTIONS ===")
-        for attr_key in config['downstream_attributes'].keys():
-            predicted = attribute_predictions[attr_key][sample_idx].cpu().numpy()
-            actual = sample_batch[attr_key][sample_idx]
-            if hasattr(actual, 'cpu'):
-                actual = actual.cpu().numpy()
-            
-            print(f"\n{attr_key.upper()}:")
-            print(f"  Predicted: {predicted}")
-            print(f"  Actual:    {actual}")
-
 
 def run_interactive_test():
     """Run interactive test with command line arguments."""
@@ -332,8 +294,6 @@ def run_interactive_test():
     if args.mode in ['test', 'both']:
         print("Running inference test...")
         test_instance.test_model_inference(model, dataloader, config)
-
-
 
 
 if __name__ == "__main__":
