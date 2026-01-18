@@ -148,7 +148,7 @@ class TestARCEncoder:
     
     def test_model_training(self, model, dataloader, config):
         """Test model training process."""
-        trainer = L.Trainer(max_epochs=config['training']['encoder']['epochs'])
+        trainer = L.Trainer(max_epochs=config['training']['encoder']['epochs'], log_every_n_steps=2)
         trainer.fit(model=model, train_dataloaders=dataloader)
             
     def test_model_inference(self, model, dataloader, config):
@@ -255,7 +255,7 @@ class TestARCTransformer:
     
     def test_model_training(self, model, dataloader, config):
         """Test model training process."""
-        trainer = L.Trainer(max_epochs=config['training']['transformer']['epochs'])
+        trainer = L.Trainer(max_epochs=config['training']['transformer']['epochs'], log_every_n_steps=2)
         trainer.fit(model=model, train_dataloaders=dataloader)
             
     def test_model_inference(self, model, dataloader, config):
