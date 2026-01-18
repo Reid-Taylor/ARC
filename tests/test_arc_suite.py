@@ -24,51 +24,52 @@ class TestARCEncoder:
     @pytest.fixture
     def model(self, config):
         """Create model instance."""
-        model_config = config['model']
-        contrastive_attributes = config.get('contrastive_attributes', {})
-        downstream_attributes = config.get('downstream_attributes', {})
+        encoder_config = config['model']['encoder']
+        downstream_attributes_config = config['model']['downstream_attributes']
+        contrastive_attributes_config = config['model']['contrastive_attributes']
+        shared_model_config = config['model']['shared']
         
         return MultiTaskEncoder(
-            attribute_requirements = list(downstream_attributes.keys()),
+            attribute_requirements = list(downstream_attributes_config.keys()),
             task_type = {
-                key: contrastive_attributes[key]['task_type'] for key in contrastive_attributes.keys()
+                key: contrastive_attributes_config[key]['task_type'] for key in contrastive_attributes_config.keys()
             },
-            learning_rate=model_config['learning_rate'],
-            alpha=model_config['alpha'],
+            learning_rate=encoder_config['learning_rate'],
+            alpha=encoder_config['alpha'],
             **{
                 "Encoder": {
-                    "input_size": model_config['grid_size'],
-                    "attention_sizes": model_config['attention_sizes'],
-                    "output_size": model_config['latent_size']
+                    "input_size": encoder_config['grid_size'],
+                    "attention_sizes": encoder_config['attention_sizes'],
+                    "output_size": shared_model_config['latent_size']
                 },
                 "Decoder": {
-                    "input_size": model_config['latent_size'],
-                    "attention_sizes": model_config['attention_sizes'],
-                    "output_size": model_config['grid_size']
+                    "input_size": shared_model_config['latent_size'],
+                    "attention_sizes": encoder_config['attention_sizes'],
+                    "output_size": encoder_config['grid_size']
                 },
                 "Contrastive Projection": { #TODO: Update this to a FC layer if needed (experiment)
-                    "input_size": model_config['latent_size'],
-                    "hidden_size": model_config['latent_size'],
-                    "output_size": model_config['latent_size']
+                    "input_size": shared_model_config['latent_size'],
+                    "hidden_size": shared_model_config['latent_size'],
+                    "output_size": shared_model_config['latent_size']
                 },
                 "Contrastive Predictor": { 
-                    "input_size": model_config['latent_size'],
-                    "output_size": model_config['latent_size']
+                    "input_size": shared_model_config['latent_size'],
+                    "output_size": shared_model_config['latent_size']
                 },
                 "Attribute Detector": { #NOTE: This is for sensitive-attribute detection heads
                     key: {
-                        "input_size": model_config['latent_size'],
+                        "input_size": shared_model_config['latent_size'],
                         "output_size": 1,
-                        "activation": contrastive_attributes[key].get('activation', "sigmoid")
-                    } for key in contrastive_attributes.keys() 
-                    if contrastive_attributes[key].get('task_type', None) == 'task_sensitive'
+                        "activation": contrastive_attributes_config[key].get('activation', "sigmoid")
+                    } for key in contrastive_attributes_config.keys() 
+                    if contrastive_attributes_config[key].get('task_type', None) == 'task_sensitive'
                 },
                 "Attribute Head": {
                     key: {
-                        "input_size": model_config['latent_size'],
-                        "hidden_size": downstream_attributes[key]['hidden_size'],
-                        "output_size": downstream_attributes[key]['output_size']
-                    } for key in downstream_attributes.keys()
+                        "input_size": shared_model_config['latent_size'],
+                        "hidden_size": downstream_attributes_config[key]['hidden_size'],
+                        "output_size": downstream_attributes_config[key]['output_size']
+                    } for key in downstream_attributes_config.keys()
                 },
             }
         )
@@ -76,21 +77,22 @@ class TestARCEncoder:
     @pytest.fixture
     def dataloader(self, config):
         """Create data loader."""
-        training_config = config['training']
-        model_config = config['model']
+        shared_training_config = config['training']['shared']
+        encoder_training_config = config['training']['encoder']
+        encoder_config = config['model']['encoder']
         
-        all_grids = ARCProblemSet.load_from_data_directory(training_config['dataset_path'])['list_of_grids']
+        all_grids = ARCProblemSet.load_from_data_directory(shared_training_config['dataset_path'])['list_of_grids']
         
         def collate_fn(batch):
             names = [item["name"] for item in batch]
 
-            padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, model_config['grid_size'])
+            padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
 
             roll_augmentations = torch.stack([torch.tensor("roll" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
             scale_grid_augmentations = torch.stack([torch.tensor("scale_grid" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
             isolate_color_augmentations = torch.stack([torch.tensor("isolate_color" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
 
-            augmented_grids = torch.stack([item["augmented_grid"] for item in batch], dim=0).reshape(-1, model_config['grid_size'])
+            augmented_grids = torch.stack([item["augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
 
             area = torch.stack([torch.tensor(item["meta"].area, dtype=torch.float32) for item in batch], dim=0).reshape(-1,1)
 
@@ -105,7 +107,7 @@ class TestARCEncoder:
                     "name": names,
 
                     "padded_grid": padded_grids,
-                    "encoded_grid": padded_grids + positional_encodings.reshape(-1, model_config['grid_size']),
+                    "encoded_grid": padded_grids + positional_encodings.reshape(-1, encoder_config['grid_size']),
                     "augmented_grid": augmented_grids,
                     "predicted_grid": None,
 
@@ -138,7 +140,7 @@ class TestARCEncoder:
         
         return torch.utils.data.DataLoader(
             all_grids,
-            batch_size=training_config['batch_size'],
+            batch_size=encoder_training_config['batch_size'],
             shuffle=True,
             collate_fn=collate_fn,
             num_workers=0
@@ -146,7 +148,7 @@ class TestARCEncoder:
     
     def test_model_training(self, model, dataloader, config):
         """Test model training process."""
-        trainer = L.Trainer(max_epochs=config['training']['epochs'])
+        trainer = L.Trainer(max_epochs=config['training']['encoder']['epochs'])
         trainer.fit(model=model, train_dataloaders=dataloader)
             
     def test_model_inference(self, model, dataloader, config):
@@ -163,7 +165,7 @@ class TestARCEncoder:
             
             # Attribute predictions
             attribute_predictions = {}
-            for attr_key in config['downstream_attributes'].keys():
+            for attr_key in config['model']['encoder']['downstream_attributes'].keys():
                 attr_head = getattr(model, f"attribute_head_{attr_key}")
                 attr_out = attr_head(sample_batch)
                 attribute_predictions[attr_key] = attr_out[f"predicted_{attr_key}"]
@@ -173,21 +175,19 @@ class TestARCEncoder:
     
     def _print_results(self, sample_batch, reconstructed, attribute_predictions, config):
         """Print reconstruction and attribute prediction results."""
-        sample_idx = config['testing']['sample_idx']
-        grid_size = config['testing']['grid_display_size']
         
-        sample_grid_size = sample_batch["grid_size"][sample_idx].squeeze().to(torch.int32)
-        original = sample_batch["padded_grid"][sample_idx].reshape(grid_size, grid_size)
-        prediction = reconstructed[sample_idx].reshape(grid_size, grid_size)
+        sample_grid_size = sample_batch["grid_size"][2].squeeze().to(torch.int32)
+        original = sample_batch["padded_grid"][2].reshape(30, 30)
+        prediction = reconstructed[2].reshape(30, 30)
         
         print("=== GRID RECONSTRUCTION ===")
         print("Original grid:\n", original[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy())
         print("Predicted grid:\n", np.round(prediction[0:sample_grid_size[0].item(), 0:sample_grid_size[1].item()].cpu().numpy()))
         
         print("\n=== ATTRIBUTE PREDICTIONS ===")
-        for attr_key in config['downstream_attributes'].keys():
-            predicted = attribute_predictions[attr_key][sample_idx].cpu().numpy()
-            actual = sample_batch[attr_key][sample_idx]
+        for attr_key in config['model']['encoder']['downstream_attributes'].keys():
+            predicted = attribute_predictions[attr_key][2].cpu().numpy()
+            actual = sample_batch[attr_key][2]
             if hasattr(actual, 'cpu'):
                 actual = actual.cpu().numpy()
             
