@@ -226,7 +226,7 @@ class TestARCTransformer:
         all_tensordicts = ARCProblemSet.load_from_data_directory(shared_training_config['dataset_path'])['list_of_tensordicts']
         
         def collate_fn(batch):
-            names = torch.stack([item["problem_name"] for item in batch])
+            names = [item["problem_name"] for item in batch]
             num_examples = torch.stack([item["num_examples"] for item in batch])
             examples = torch.stack([item["examples"] for item in batch])
             challenge = torch.stack([item["challenge"] for item in batch])
@@ -239,6 +239,8 @@ class TestARCTransformer:
                     "examples": examples,
                     "challenge": challenge,
                     "solution": solution,
+                    "transformation_description":None,
+                    "random_description":None
                 },
                 batch_size=len(batch)
             )
@@ -264,8 +266,7 @@ class TestARCTransformer:
         with torch.no_grad():
             # Forward pass
             pass
-
-            
+          
 
 def run_interactive_test():
     """Run interactive test with command line arguments."""

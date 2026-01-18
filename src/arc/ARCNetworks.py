@@ -139,7 +139,7 @@ class TransformationSpaceProjection(torch.nn.Module):
 
         self.final_map = torch.nn.Linear(input_size * 2, output_size)
 
-    def forward(self, input_embedding:Float[torch.Tensor, "B D"], output_embedding: Float[torch.Tensor, "B D"], random_augmentation: Float[torch.Tensor, "B D"]):
+    def forward(self, input_embedding:torch.Tensor, output_embedding:torch.Tensor, random_augmentation:torch.Tensor):
 
         def forward_march(x, y):
             input_as_query = F.softmax(self.reading_example_input(x))
@@ -148,14 +148,14 @@ class TransformationSpaceProjection(torch.nn.Module):
             input_concatenated = torch.cat((x, y), dim=-1)
             input_concatenated_mapped = F.softmax(self.concatenated_layer_map(input_concatenated))
 
-            input_attention = torch.matmul(input_as_query, input_concatenated_mapped.t(-2,-1))
-            output_attention = torch.matmul(output_as_query, input_concatenated_mapped.t(-2,-1))
+            input_attention = torch.matmul(input_as_query, input_concatenated_mapped.transpose(-2,-1))
+            output_attention = torch.matmul(output_as_query, input_concatenated_mapped.transpose(-2,-1))
 
-            meta_attended = F.softmax(torch.matmul(input_attention, output_attention.t(-2,-1)))
+            meta_attended = F.softmax(torch.matmul(input_attention, output_attention.transpose(-2,-1)))
 
             d_k = input_concatenated_mapped.size()[-1]
 
-            result = torch.matmul(meta_attended, input_concatenated_mapped.t(-2,-1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+            result = torch.matmul(meta_attended, input_concatenated_mapped.transpose(-2,-1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
 
             result = torch.relu(self.final_map(result))
 

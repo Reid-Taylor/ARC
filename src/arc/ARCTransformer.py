@@ -37,12 +37,15 @@ class TransformationDescriber(L.LightningModule):
         This network should receive as inputs the embeddings of the example challenges and solutions. We can use contrastive learning approaches to create a "transformation" space, which is trained to create similar embeddings representing the relationships between example challenges and solutions. The relationships for examples under the same name must be encoded as near-identical--Ultimately, we will take the average of these embeddings of the many examples to provide the "transformation" description provided at test time. We can prompt the network to learn more quickly the desirable characteristics by leveraging data augmentations (of sensitive tasks, that is) to various input & (constructed) output grids to enforce the learning of transformations. We can train this first piece to explicitly learn what should encoded as the null-transformation, the identity function.
         """
         super().__init__()
-        self.transformation_description = TensorDictModule(
-            TransformationSpaceProjection(
-                **network_dimensions["TransformationDescriber"]
-            ),
-            in_keys=["example_input_embedding","example_output_embedding", "input_randomly_augmented"],
-            out_keys=["transformation_description", "random_description"]
+        # self.transformation_description = TensorDictModule(
+        #     TransformationSpaceProjection(
+        #         **network_dimensions["TransformationDescriber"]
+        #     ),
+        #     in_keys=["example_input_embedding","example_output_embedding", "input_randomly_augmented"],
+        #     out_keys=["transformation_description", "random_description"]
+        # )
+        self.transformation_description = TransformationSpaceProjection(
+            **network_dimensions["TransformationDescriber"]
         )
 
         self.num_tasks = 7
@@ -50,7 +53,7 @@ class TransformationDescriber(L.LightningModule):
         self.lr: float = learning_rate
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.alpha: float = alpha
-        self.custom_task_weighting = torch.Tensor([1,1,0.5,2,1,1,1], dtype=torch.float32)
+        self.custom_task_weighting = torch.tensor([1,1,0.5,2,1,1,1], dtype=torch.float32)
 
         self.register_buffer("L0", torch.zeros(self.num_tasks))
         self.L0_initialized: bool = False
@@ -58,7 +61,7 @@ class TransformationDescriber(L.LightningModule):
         self.automatic_optimization: bool = False
 
     def _get_parameters(self):
-        params = [p for p in self.transformation_description.module.parameters() if p.requires_grad]
+        params = [p for p in self.transformation_description.parameters() if p.requires_grad]
 
         return params
     
@@ -76,35 +79,49 @@ class TransformationDescriber(L.LightningModule):
             "identic" : []
         }
 
-        for example in x.examples:
-            input_example: Float[torch.Tensor, "1 D"] = example.input.embedding
-            output_example: Float[torch.Tensor, "1 D"] = example.output.embedding
-            input_augmentation: Float[torch.Tensor, "1 D"] = example.input.augmented_grid_embedding
-            output_augmentation: Float[torch.Tensor, "1 D"] = example.output.augmented_grid_embedding
+        for idx in range(x['num_examples'].item()):
+            input_example: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['input']['embedding']
+            output_example: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['output']['embedding']
+            input_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['input']['augmented_grid_embedding']
+            output_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['output']['augmented_grid_embedding']
 
-            example_transformation_description, example_random_description = self.transformation_description(input_example, output_example, input_augmentation)
+            transform_results = self.transformation_description(input_example, output_example, input_augmentation)
+            example_transformation_description = transform_results["transformation"]
+            example_random_description = transform_results["random"]
 
-            example_backwards_transformation_description, example_backwards_random_description = self.transformation_description(output_example, input_example, output_augmentation)
+            backwards_results = self.transformation_description(output_example, input_example, output_augmentation)
+            example_backwards_transformation_description = backwards_results["transformation"]
+            example_backwards_random_description = backwards_results["random"]
 
-            identic_input_description, _ = self.transformation_description(input_example, input_example, output_augmentation)
-            identic_output_description, _ = self.transformation_description(output_example, output_example, output_augmentation)
+            identic_input_results = self.transformation_description(input_example, input_example, output_augmentation)
+            identic_input_description = identic_input_results["transformation"]
+            
+            identic_output_results = self.transformation_description(output_example, output_example, output_augmentation)
+            identic_output_description = identic_output_results["transformation"]
 
             results['standard'].append(example_transformation_description)
             results["backwards"].append(example_backwards_transformation_description)
             results['augmentation'].extend([example_random_description,example_backwards_random_description])
             results["identic"].extend([identic_input_description,identic_output_description])
 
-        challenge_input: Float[torch.Tensor, "1 D"] = x.challenge.embedding
-        challenge_output: Float[torch.Tensor, "1 D"] = x.solution.embedding
-        input_augmentation: Float[torch.Tensor, "1 D"] = example.input.augmented_grid_embedding
-        output_augmentation: Float[torch.Tensor, "1 D"] = example.output.augmented_grid_embedding
+        challenge_input: Float[torch.Tensor, "1 D"] = x['challenge']['embedding']
+        challenge_output: Float[torch.Tensor, "1 D"] = x['solution']['embedding']
+        input_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['input']['augmented_grid_embedding']
+        output_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['output']['augmented_grid_embedding']
 
-        example_transformation_description, example_random_description = self.transformation_description(challenge_input, challenge_output, input_augmentation)
+        challenge_transform_results = self.transformation_description(challenge_input, challenge_output, input_augmentation)
+        example_transformation_description = challenge_transform_results["transformation"]
+        example_random_description = challenge_transform_results["random"]
 
-        example_backwards_transformation_description, example_backwards_random_description = self.transformation_description(challenge_output, challenge_input, output_augmentation)
+        challenge_backwards_results = self.transformation_description(challenge_output, challenge_input, output_augmentation)
+        example_backwards_transformation_description = challenge_backwards_results["transformation"]
+        example_backwards_random_description = challenge_backwards_results["random"]
 
-        identic_input_description, _ = self.transformation_description(challenge_input, challenge_input, output_augmentation)
-        identic_output_description, _ = self.transformation_description(challenge_output, challenge_output, output_augmentation)
+        challenge_identic_input_results = self.transformation_description(challenge_input, challenge_input, output_augmentation)
+        identic_input_description = challenge_identic_input_results["transformation"]
+        
+        challenge_identic_output_results = self.transformation_description(challenge_output, challenge_output, output_augmentation)
+        identic_output_description = challenge_identic_output_results["transformation"]
 
         results['standard'].append(example_transformation_description)
         results["backwards"].append(example_backwards_transformation_description)
@@ -113,7 +130,7 @@ class TransformationDescriber(L.LightningModule):
 
         return results
     
-    def training_step(self, batch: Float[torch.Tensor, "B D"]):
+    def training_step(self, batch):
         opt_model, opt_w = self.optimizers()
         results = self.forward(batch)
         all_params = self._get_parameters()
@@ -123,7 +140,10 @@ class TransformationDescriber(L.LightningModule):
         opposite_task_loss = 0
         identic_loss = 0
 
-        all_embeddings = torch.stack([v for key, value in results for v in results[value] if key!="identic"])
+        all_embeddings = []
+        for key in ['standard', 'backwards', 'augmentation']:
+            all_embeddings.extend(results[key])
+        all_embeddings = torch.stack(all_embeddings)
 
         for x,y in combinations(results['standard'], 2):
             high_proximity_loss += (

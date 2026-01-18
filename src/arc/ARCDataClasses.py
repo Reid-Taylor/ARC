@@ -294,18 +294,18 @@ class ARCProblemSet:
         for i, example in enumerate(self.examples):
             examples_data[f"example_{i}"] = TensorDict({
                 "input": TensorDict({
-                    "embedding": example.input.embedding,
+                    "embedding": example.input.embedding if example.input.embedding is not None else torch.randn(1, 64),
                     "grid": example.input.grid,
                     "padded_grid": example.input.padded_grid,
                     "attributes": example.input.attributes,
-                    "augmented_embedding": example.input.augmented_grid_embedding
+                    "augmented_grid_embedding": example.input.augmented_grid_embedding if example.input.augmented_grid_embedding is not None else torch.randn(1, 64)
                 }),
                 "output": TensorDict({
-                    "embedding": example.output.embedding,
+                    "embedding": example.output.embedding if example.output.embedding is not None else torch.randn(1, 64),
                     "grid": example.output.grid,
                     "padded_grid": example.output.padded_grid,
                     "attributes": example.output.attributes,
-                    "augmented_embedding": example.output.augmented_grid_embedding
+                    "augmented_grid_embedding": example.output.augmented_grid_embedding if example.output.augmented_grid_embedding is not None else torch.randn(1, 64)
                 })
             })
         
@@ -319,19 +319,19 @@ class ARCProblemSet:
             
             # Challenge and solution
             "challenge": TensorDict({
-                "embedding": self.challenge.embedding,
+                "embedding": self.challenge.embedding if self.challenge.embedding is not None else torch.randn(1, 64),
                 "grid": self.challenge.grid,
                 "padded_grid": self.challenge.padded_grid,
                 "attributes": self.challenge.attributes,
-                "augmented_embedding": self.challenge.augmented_grid_embedding
+                "augmented_grid_embedding": self.challenge.augmented_grid_embedding if self.challenge.augmented_grid_embedding is not None else torch.randn(1, 64)
             }),
             
             "solution": TensorDict({
-                "embedding": self.solution.embedding,
+                "embedding": self.solution.embedding if self.solution.embedding is not None else torch.randn(1, 64),
                 "grid": self.solution.grid,
                 "padded_grid": self.solution.padded_grid,
                 "attributes": self.solution.attributes,
-                "augmented_embedding": self.solution.augmented_grid_embedding
+                "augmented_grid_embedding": self.solution.augmented_grid_embedding if self.solution.augmented_grid_embedding is not None else torch.randn(1, 64)
             })
         })
         
