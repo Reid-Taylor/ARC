@@ -1,6 +1,7 @@
 from __future__ import annotations
 from beartype import beartype
 from jaxtyping import Float
+from typing import Tuple
 import torch
 from torch.nn import functional as F
 
@@ -123,3 +124,57 @@ class Decoder(torch.nn.Module):
         attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
 
         return self.fc_out(attended_layers)
+    
+@beartype
+class TransformationDescriber(torch.nn.Module):
+    """
+    A custom module which will learn, from the concatenation of two embeddings, a description of what makes one into the other.
+    """
+    def __init__(self, input_size: int, output_size: int):
+        super().__init__()
+
+        self.reading_example_input = torch.nn.Linear(input_size, input_size * 2)
+        self.reading_example_output = torch.nn.Linear(input_size, input_size * 2)
+
+        self.concatenated_layer_map = torch.nn.Linear(input_size * 2, input_size * 2)
+
+        self.final_map = torch.nn.Linear(input_size * 2, output_size)
+
+    def forward(self, input_embedding:Float[torch.Tensor, "B D"], output_embedding: Float[torch.Tensor, "B D"], random_augmentation: Float[torch.Tensor, "B D"]) -> Tuple(Float[torch.Tensor, "B D"]):
+
+        def forward_march(x, y):
+            input_as_query = F.softmax(self.reading_example_input(x))
+            output_as_query = F.softmax(self.reading_example_output(y))
+
+            input_concatenated = torch.cat((x, y), dim=-1)
+            input_concatenated_mapped = F.softmax(self.concatenated_layer_map(input_concatenated))
+
+            input_attention = torch.matmul(input_as_query, input_concatenated_mapped.t(-2,-1))
+            output_attention = torch.matmul(output_as_query, input_concatenated_mapped.t(-2,-1))
+
+            meta_attended = F.softmax(torch.matmul(input_attention, output_attention.t(-2,-1)))
+
+            d_k = input_concatenated_mapped.size()[-1]
+
+            result = torch.matmul(meta_attended, input_concatenated_mapped.t(-2,-1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+
+            result = torch.relu(self.final_map(result))
+
+            return result
+        
+        transformation_description = forward_march(
+            input_embedding, 
+            output_embedding
+        )
+
+        random_description = forward_march(
+            input_embedding, 
+            random_augmentation
+        )
+        
+        results = {
+            "transformation": transformation_description, 
+            "random" : random_description
+        }
+
+        return results
