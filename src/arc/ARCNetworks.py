@@ -1,7 +1,6 @@
 from __future__ import annotations
 from beartype import beartype
 from jaxtyping import Float
-from typing import Tuple
 import torch
 from torch.nn import functional as F
 
@@ -140,7 +139,7 @@ class TransformationDescriber(torch.nn.Module):
 
         self.final_map = torch.nn.Linear(input_size * 2, output_size)
 
-    def forward(self, input_embedding:Float[torch.Tensor, "B D"], output_embedding: Float[torch.Tensor, "B D"], random_augmentation: Float[torch.Tensor, "B D"]) -> Tuple(Float[torch.Tensor, "B D"]):
+    def forward(self, input_embedding:Float[torch.Tensor, "B D"], output_embedding: Float[torch.Tensor, "B D"], random_augmentation: Float[torch.Tensor, "B D"]):
 
         def forward_march(x, y):
             input_as_query = F.softmax(self.reading_example_input(x))

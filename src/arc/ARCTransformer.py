@@ -29,7 +29,7 @@ class TransformationDescriber(L.LightningModule):
     """
     def __init__(
             self,
-            network_dimensions: Dict[str:List[int]],
+            network_dimensions: Dict[str, Dict[str, int]],
             learning_rate:float=1e-3, 
             alpha:float=0.85
         ) -> None:
@@ -68,7 +68,7 @@ class TransformationDescriber(L.LightningModule):
         w = self.num_tasks * w / w.sum()
         return w
     
-    def forward(self, x:ARCProblemSet) -> Dict[str: Float[torch.Tensor, "B D"]]:
+    def forward(self, x):
         results = {
             "standard" : [],
             "backwards" : [],

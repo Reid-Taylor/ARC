@@ -11,8 +11,8 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config, parse_args
 from src.arc.ARCDataClasses import ARCProblemSet
-from arc.ARCEncoder import MultiTaskEncoder, positional_encodings
-from arc.ARCTransformer import TransformationDescriber
+from src.arc.ARCEncoder import MultiTaskEncoder, positional_encodings
+from src.arc.ARCTransformer import TransformationDescriber
 # from arc.ARCLinker import Linker
 
 class TestARCEncoder:
@@ -25,8 +25,8 @@ class TestARCEncoder:
     def model(self, config):
         """Create model instance."""
         encoder_config = config['model']['encoder']
-        downstream_attributes_config = config['model']['downstream_attributes']
-        contrastive_attributes_config = config['model']['contrastive_attributes']
+        downstream_attributes_config = config['model']['encoder']['downstream_attributes']
+        contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
         shared_model_config = config['model']['shared']
         
         return MultiTaskEncoder(
