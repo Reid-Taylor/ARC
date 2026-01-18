@@ -17,7 +17,7 @@ learning_rate_w = 0.005
 area = {hidden_size = 96, output_size = 1}
 grid_size = {hidden_size = 96, output_size = 2}
 num_colors = {hidden_size = 96, output_size = 1}
-color_map = { hidden_size = 96, output_size = 10}
+color_map = {hidden_size = 96, output_size = 10}
 [model.encoder.contrastive_attributes]
 area = {task_type = "task_invariant"}
 color_map = {task_type = "task_invariant"}

@@ -111,6 +111,7 @@ class ARCGrid:
         self.attributes: Int[torch.Tensor, "1 _"] = self.meta._to_tensor()
 
         self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None
+        self.augmented_grid_embedding= None
 
     def augment_grid(self) -> None:
         for aug in self.augmentation_config.augmentation_set:

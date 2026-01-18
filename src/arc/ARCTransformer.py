@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from src.arc.ARCNetworks import TransformationDescriber
+from src.arc.ARCNetworks import TransformationSpaceProjection
 from src.arc.ARCDataClasses import ARCProblemSet
 from itertools import combinations
 
@@ -29,16 +29,16 @@ class TransformationDescriber(L.LightningModule):
     """
     def __init__(
             self,
-            network_dimensions: Dict[str, Dict[str, int]],
             learning_rate:float=1e-3, 
-            alpha:float=0.85
+            alpha:float=0.85,
+            **network_dimensions
         ) -> None:
         """
         This network should receive as inputs the embeddings of the example challenges and solutions. We can use contrastive learning approaches to create a "transformation" space, which is trained to create similar embeddings representing the relationships between example challenges and solutions. The relationships for examples under the same name must be encoded as near-identical--Ultimately, we will take the average of these embeddings of the many examples to provide the "transformation" description provided at test time. We can prompt the network to learn more quickly the desirable characteristics by leveraging data augmentations (of sensitive tasks, that is) to various input & (constructed) output grids to enforce the learning of transformations. We can train this first piece to explicitly learn what should encoded as the null-transformation, the identity function.
         """
         super().__init__()
         self.transformation_description = TensorDictModule(
-            TransformationDescriber(
+            TransformationSpaceProjection(
                 **network_dimensions["TransformationDescriber"]
             ),
             in_keys=["example_input_embedding","example_output_embedding", "input_randomly_augmented"],
@@ -229,7 +229,7 @@ class TransformationDescriber(L.LightningModule):
             list_of_gradients = [g for g in gradients if g is not None]
 
             if list_of_gradients:
-                return torch.norm(torch.stack([g.norm() for g in gradients]), 2)
+                return torch.norm(torch.stack([g.norm() for g in list_of_gradients]), 2)
             return torch.tensor(0.0, device=loss.device, requires_grad=True)
         
         # Compute gradients per task

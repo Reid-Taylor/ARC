@@ -211,7 +211,6 @@ class MultiTaskEncoder(L.LightningModule):
         task_sensitive_loss = []
         for key in self.task_sensitives:
             key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
-            print()
             task_sensitive_loss.append(
                 F.binary_cross_entropy(
                     results["predicted_task_sensitive_attributes"][key], 
@@ -250,32 +249,32 @@ class MultiTaskEncoder(L.LightningModule):
             list_of_gradients = [g for g in gradients if g is not None]
 
             if list_of_gradients:
-                return torch.norm(torch.stack([g.norm() for g in gradients]), 2)
+                return torch.norm(torch.stack([g.norm() for g in list_of_gradients]), 2)
             return torch.tensor(0.0, device=loss.device, requires_grad=True)
 
         # Reconstruction task gradient norm
         G.append(
-            self._get_gradient(w[0] * loss[0], 
+            _get_gradient(w[0] * loss[0], 
             all_params.get("online_encoder") + all_params.get("decoder"))
         )
         
         # Attribute prediction tasks gradient norms
         for attribute in self.downstream_attributes:
-            G.append(self._get_gradient(
+            G.append(_get_gradient(
                 w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
                 all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
             ))
         
         # Attribute detection tasks gradient norms
         for key in self.task_sensitives:
-            G.append(self._get_gradient(
+            G.append(_get_gradient(
                 w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")],  
                 all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
             ))
         
         # Attribute invariant tasks gradient norms
         for key in self.task_invariants:
-            G.append(self._get_gradient(
+            G.append(_get_gradient(
                 w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
                 all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
             ))

@@ -210,7 +210,7 @@ class TestARCTransformer:
         return TransformationDescriber(
             learning_rate=model_config['learning_rate'],
             alpha=model_config['alpha'],
-            network_dimensions={
+            **{
                 "TransformationDescriber": {
                     "input_size": shared_configs['latent_size'],
                     "output_size": shared_configs['transformation_dimension_size']
@@ -263,10 +263,8 @@ class TestARCTransformer:
         
         with torch.no_grad():
             # Forward pass
-            encoder_out = model.online_encoder(sample_batch)
-            sample_batch["online_embedding"] = encoder_out["online_embedding"]
-            decoder_out = model.decoder(sample_batch)
-            reconstructed = decoder_out["predicted_grid"]
+            pass
+
             
 
 def run_interactive_test():

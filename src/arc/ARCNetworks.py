@@ -125,7 +125,7 @@ class Decoder(torch.nn.Module):
         return self.fc_out(attended_layers)
     
 @beartype
-class TransformationDescriber(torch.nn.Module):
+class TransformationSpaceProjection(torch.nn.Module):
     """
     A custom module which will learn, from the concatenation of two embeddings, a description of what makes one into the other.
     """
