@@ -7,7 +7,7 @@ import torch
 import os
 import glob
 from jaxtyping import Int, Float
-from tensordict import tensorclass
+from tensordict import tensorclass, TensorDict
 from beartype import beartype
 
 from random import sample
@@ -82,6 +82,7 @@ class ARCGrid:
     meta: Optional[ARCGridMeta]=None
     attributes: Optional[Int[torch.Tensor, "1 _"]] = None
     embedding: Optional[Float[torch.Tensor, "1 D"]] = None
+    augmented_grid_embedding: Optional[Float[torch.Tensor, "1 D"]] = None
     """
     The ARC Grid represents a bit array which outlines either an input or an output grid. We use base tensor for these bit arrays, and provide helper methods which power preprocessing for each layer of the ARC network. 
     """
@@ -213,33 +214,29 @@ class ARCExample:
     def __iter__(self):
         yield self.input
         yield self.output
-    
+
 @dataclass
 class ARCProblemSet:
-    """
-    The ARCProblemSet DataClass streamlines all operations, networks, and troubleshooting for the ARC challenge. We construct a class to be instantiated for each problem within the ARC 
-    """
     @staticmethod
     def load_from_data_directory(
             dataset:str='training'
             ):
-        """
-        Static method to load an ARCProblemSet from JSON data. Due to complications in the source formatting, we create a uniform class method to load data from the source files. 
-        """
         assert dataset in ['training', 'evaluation'], "Dataset must be one of 'training' or 'evaluation'."
         data_dir = f"data/ARC-AGI/data/{dataset}/"
         json_files = glob.glob(os.path.join(data_dir, "*.json"))
         all_data: list[ARCProblemSet] = []
+        all_tensordicts: list[TensorDict] = []
 
         for file_path in json_files:
             with open(file_path, 'r') as f:
                 data = JSONDecoder().decode(f.read())
                 problem_set = ARCProblemSet(
-                    os.path.basename(file_path)[:-5],  # Remove .json extension
+                    os.path.basename(file_path)[:-5],
                     data['train'],
-                    data['test']  # Placeholder for answer; will be filled later
+                    data['test']
                 )
                 all_data.append(problem_set)
+                all_tensordicts.append(problem_set.create_nested_tensordict())
         
 
         samples = []
@@ -254,7 +251,12 @@ class ARCProblemSet:
                     "augmentation_set": grid.augmentation_config,
                     "augmented_grid": grid.padded_augmented_grid
                 })
-        return samples
+        
+        return {
+            "list_of_grids": samples, 
+            "list_of_problems": all_data, 
+            "list_of_tensordicts": all_tensordicts
+        }
     
     def __init__(
             self, 
@@ -264,21 +266,72 @@ class ARCProblemSet:
             ):
         self.name = key
         self.num_examples = len(training)
-        self.examples = {
-            i : ARCExample(key, training[i])
+        self.examples = [
+            ARCExample(key, training[i]) 
             for i in range(len(training))
-        }
+        ]
+        self.input_examples = [x.input for x in self.examples]
+        self.output_examples = [x.output for x in self.examples]
         self.challenge = ARCGrid(name=key, values=challenge[0]['input'])
         self.solution = ARCGrid(name=key, values=challenge[0]['output'])
 
-        self.predicted_grid:torch.Tensor = torch.zeros_like(self.solution.grid)  # Placeholder for predicted grid
+        self.predicted_grid:torch.Tensor = torch.zeros_like(self.solution.grid)
 
     def __str__(self) -> str:
         return f"ARC Problem Set: {self.name} with {self.num_examples} training examples.\nChallenge Grid:\n{self.challenge.grid}\nSolution Grid:\n{self.solution.grid}\nPredicted Grid:\n{self.predicted_grid}\n"
     
     def __iter__(self):
-        for idx, example in self.examples.items():
+        for idx, example in enumerate(self.examples):
             yield "example", f"{idx}", example.input
             yield "example", f"{idx}", example.output
         yield "task", "challenge", self.challenge
         yield "task", "solution", self.solution
+
+    def create_nested_tensordict(self) -> TensorDict:
+        examples_data = {}
+        
+        for i, example in enumerate(self.examples):
+            examples_data[f"example_{i}"] = TensorDict({
+                "input": TensorDict({
+                    "embedding": example.input.embedding,
+                    "grid": example.input.grid,
+                    "padded_grid": example.input.padded_grid,
+                    "attributes": example.input.attributes,
+                    "augmented_embedding": example.input.augmented_grid_embedding
+                }),
+                "output": TensorDict({
+                    "embedding": example.output.embedding,
+                    "grid": example.output.grid,
+                    "padded_grid": example.output.padded_grid,
+                    "attributes": example.output.attributes,
+                    "augmented_embedding": example.output.augmented_grid_embedding
+                })
+            })
+        
+        # Create main TensorDict structure
+        arc_tensordict = TensorDict({
+            "problem_name": self.name,
+            "num_examples": torch.tensor([self.num_examples]),
+            
+            # All examples nested
+            "examples": TensorDict(examples_data),
+            
+            # Challenge and solution
+            "challenge": TensorDict({
+                "embedding": self.challenge.embedding,
+                "grid": self.challenge.grid,
+                "padded_grid": self.challenge.padded_grid,
+                "attributes": self.challenge.attributes,
+                "augmented_embedding": self.challenge.augmented_grid_embedding
+            }),
+            
+            "solution": TensorDict({
+                "embedding": self.solution.embedding,
+                "grid": self.solution.grid,
+                "padded_grid": self.solution.padded_grid,
+                "attributes": self.solution.attributes,
+                "augmented_embedding": self.solution.augmented_grid_embedding
+            })
+        })
+        
+        return arc_tensordict
