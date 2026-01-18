@@ -14,13 +14,6 @@ positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / 
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
-    """
-    An Autoencoder model which combines an encoder, decoder, and an unspecified number of attribute heads for multitask learning. 
-    
-    The autoencoder uses a custom training step which balances the losses from reconstruction and attribute prediction using dynamic task weighting based on Zhao Chen's 2018 "GradNorm" Paper.
-
-    We combine this self-supervised and supervised learning approach with contrastive, unsupervised learning to further improve the latent space representation, inspired by SimCLR and BYOL techniques.
-    """
     def __init__(
             self, 
             attribute_requirements: List[str], 
@@ -146,11 +139,10 @@ class MultiTaskEncoder(L.LightningModule):
         return params
 
     def _task_weights(self) -> Float[torch.Tensor, "A"]:
-        #TODO: consider weighting across reconstruction?
         w = F.softmax(self.raw_w, dim=0) + 1e-8
         w = self.num_tasks * w / w.sum()
         return w
-    
+        
     def forward(self, x) -> Dict[str, Float[torch.Tensor, "..."]]:
         # Encode input grid into latent embedding space
         z = self.online_encoder(x)['online_embedding']
@@ -252,56 +244,41 @@ class MultiTaskEncoder(L.LightningModule):
         w = self._task_weights()
         G = []
         loss_total = torch.sum((w * loss))
-        
+
+        def _get_gradient(relevant_weighted_losses, params) -> List[torch.Tensor]:
+            gradients = torch.autograd.grad(relevant_weighted_losses, params, retain_graph=True, create_graph=True, allow_unused=True)
+            list_of_gradients = [g for g in gradients if g is not None]
+
+            if list_of_gradients:
+                return torch.norm(torch.stack([g.norm() for g in gradients]), 2)
+            return torch.tensor(0.0, device=loss.device, requires_grad=True)
+
         # Reconstruction task gradient norm
-        grads_0 = torch.autograd.grad(w[0] * loss[0], all_params.get("online_encoder") + all_params.get("decoder"), retain_graph=True, create_graph=True, allow_unused=True)
-        grads_0 = [g for g in grads_0 if g is not None]
-        if grads_0:
-            G.append(torch.norm(torch.stack([g.norm() for g in grads_0]), 2))
-        else:
-            G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
+        G.append(
+            self._get_gradient(w[0] * loss[0], 
+            all_params.get("online_encoder") + all_params.get("decoder"))
+        )
         
         # Attribute prediction tasks gradient norms
         for attribute in self.downstream_attributes:
-            W_attribute = all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
-            grads_1 = torch.autograd.grad(
+            G.append(self._get_gradient(
                 w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
-                W_attribute, 
-                retain_graph=True, create_graph=True, allow_unused=True
-            )
-            grads_1 = [g for g in grads_1 if g is not None]
-            if grads_1:
-                G.append(torch.norm(torch.stack([g.norm() for g in grads_1]), 2))
-            else:
-                G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
+                all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
+            ))
         
         # Attribute detection tasks gradient norms
         for key in self.task_sensitives:
-            W_detection = all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
-            grads_2 = torch.autograd.grad(
-                w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")], 
-                W_detection, 
-                retain_graph=True, create_graph=True, allow_unused=True
-            )
-            grads_2 = [g for g in grads_2 if g is not None]
-            if grads_2:
-                G.append(torch.norm(torch.stack([g.norm() for g in grads_2]), 2))
-            else:
-                G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
+            G.append(self._get_gradient(
+                w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")],  
+                all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
+            ))
         
         # Attribute invariant tasks gradient norms
         for key in self.task_invariants:
-            W_invariant = all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
-            grads_3 = torch.autograd.grad(
+            G.append(self._get_gradient(
                 w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
-                W_invariant, 
-                retain_graph=True, create_graph=True, allow_unused=True
-            )
-            grads_3 = [g for g in grads_3 if g is not None]
-            if grads_3:
-                G.append(torch.norm(torch.stack([g.norm() for g in grads_3]), 2))
-            else:
-                G.append(torch.tensor(0.0, device=loss.device, requires_grad=True))
+                all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
+            ))
         
         # Compute mean gradient norm
         G = torch.stack(G)
