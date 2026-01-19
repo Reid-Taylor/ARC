@@ -16,6 +16,16 @@ from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
 from tensordict import TensorDict
 
+def get_device():
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    return torch.device("cpu")
+
+device = get_device()
+print(f"Using: {device}")
+if device.type == 'cuda':
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+
 # Add project root to path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
@@ -31,8 +41,6 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
     all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_grids']
     
     def collate_fn(batch):
-        from src.arc.ARCEncoder import positional_encodings
-        
         names = [item["name"] for item in batch]
 
         padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
@@ -49,14 +57,13 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
         grid_size = torch.stack([torch.tensor(item["meta"].grid_size, dtype=torch.float32) for item in batch], dim=0).reshape(-1,2)
         num_colors = torch.stack([torch.tensor(item["meta"].num_colors, dtype=torch.float32) for item in batch], dim=0)
         color_map = torch.stack([torch.tensor(item["meta"].color_map, dtype=torch.float32) for item in batch], dim=0).reshape(-1,10)
-        
-        
+
         return TensorDict(
             {
                 "name": names,
 
                 "padded_grid": padded_grids,
-                "encoded_grid": padded_grids + positional_encodings.reshape(-1, encoder_config['grid_size']),
+                "encoded_grid": padded_grids,
                 "padded_augmented_grid": augmented_grids,
                 "predicted_grid": None,
 
@@ -84,7 +91,8 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
                 "target_representation": None,
                 "predicted_target_representation": None
             },
-            batch_size=len(batch)
+            batch_size=len(batch),
+            device=get_device()
         )
     
     # Create dataloader
@@ -93,7 +101,8 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=2 if torch.cuda.is_available() else 0
+        num_workers=2 if torch.cuda.is_available() else 0,
+        pin_memory=(get_device.type=="cuda")
     )
     
     return dataloader
@@ -150,7 +159,7 @@ def create_model(config: Dict[str, Any], learning_rate: float, alpha: float) -> 
                 } for key in downstream_attributes_config.keys()
             },
         }
-    )
+    ).to(get_device())
     
     return model
 

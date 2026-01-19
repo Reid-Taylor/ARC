@@ -11,7 +11,7 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config, parse_args
 from src.arc.ARCDataClasses import ARCProblemSet
-from src.arc.ARCEncoder import MultiTaskEncoder, positional_encodings
+from src.arc.ARCEncoder import MultiTaskEncoder
 from src.arc.ARCTransformer import TransformationDescriber
 # from arc.ARCLinker import Linker
 
@@ -107,7 +107,7 @@ class TestARCEncoder:
                     "name": names,
 
                     "padded_grid": padded_grids,
-                    "encoded_grid": padded_grids + positional_encodings.reshape(-1, encoder_config['grid_size']),
+                    "encoded_grid": padded_grids,
                     "augmented_grid": augmented_grids,
                     "predicted_grid": None,
 
@@ -226,6 +226,7 @@ class TestARCTransformer:
         all_tensordicts = ARCProblemSet.load_from_data_directory(shared_training_config['dataset_path'])['list_of_tensordicts']
         
         def collate_fn(batch):
+
             names = [item["problem_name"] for item in batch]
             num_examples = torch.stack([item["num_examples"] for item in batch])
             examples = torch.stack([item["examples"] for item in batch])

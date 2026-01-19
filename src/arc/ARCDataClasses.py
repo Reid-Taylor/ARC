@@ -15,6 +15,8 @@ from random import sample
 C: int = 10
 BATCH_SIZE:int = 1
 AUGMENTATIONS: list[str] = ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
+positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
+
 
 @beartype
 class AugmentationConfig:
@@ -113,6 +115,38 @@ class ARCGrid:
         self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None
         self.augmented_grid_embedding= None
 
+    def to_tensordict(self) -> TensorDict:
+        return TensorDict({
+            "grid_embedding": self.embedding if self.embedding is not None else torch.randn(1, 64),
+            "grid": self.padded_grid + positional_encodings,
+            "augmented_grid": self.padded_augmented_grid,
+            "predicted_grid": None,
+
+            "area": self.meta.area,
+            "grid_size": self.meta.grid_size,
+            "num_colors": self.meta.num_colors,
+            "color_map": self.meta.color_map,
+            
+            "predicted_area": None,
+            "predicted_grid_size": None,
+            "predicted_num_colors": None,
+            "predicted_color_map": None,
+
+            "presence_roll": torch.tensor(["roll" in self.augmentation_config.augmentation_set], dtype=torch.bool),
+            "presence_scale_grid": torch.tensor(["scale_grid" in self.augmentation_config.augmentation_set], dtype=torch.bool),
+            "presence_isolate_color": torch.tensor(["isolate_color" in self.augmentation_config.augmentation_set], dtype=torch.bool),
+            
+            "predicted_presence_roll": None,
+            "predicted_presence_scale_grid": None,
+            "predicted_presence_isolate_color": None,
+
+            "online_embedding": None,
+            "target_embedding": None,
+            "online_representation": None,
+            "target_representation": None,
+            "predicted_target_representation": None
+        })
+    
     def augment_grid(self) -> None:
         for aug in self.augmentation_config.augmentation_set:
             if aug == "color_map":
@@ -293,22 +327,8 @@ class ARCProblemSet:
         
         for i, example in enumerate(self.examples):
             examples_data[f"example_{i}"] = TensorDict({
-                "input": TensorDict({
-                    "embedding": example.input.embedding if example.input.embedding is not None else torch.randn(1, 64),
-                    "grid": example.input.grid,
-                    "padded_grid": example.input.padded_grid,
-                    "padded_augmented_grid": example.input.padded_augmented_grid,
-                    "attributes": example.input.attributes,
-                    "augmented_grid_embedding": example.input.augmented_grid_embedding if example.input.augmented_grid_embedding is not None else torch.randn(1, 64)
-                }),
-                "output": TensorDict({
-                    "embedding": example.output.embedding if example.output.embedding is not None else torch.randn(1, 64),
-                    "grid": example.output.grid,
-                    "padded_grid": example.output.padded_grid,
-                    "padded_augmented_grid": example.output.padded_augmented_grid,
-                    "attributes": example.output.attributes,
-                    "augmented_grid_embedding": example.output.augmented_grid_embedding if example.output.augmented_grid_embedding is not None else torch.randn(1, 64)
-                })
+                "input": example.input.to_tensordict(),
+                "output": example.output.to_tensordict()
             })
         
         # Create main TensorDict structure
@@ -316,27 +336,13 @@ class ARCProblemSet:
             "problem_name": self.name,
             "num_examples": torch.tensor([self.num_examples]),
             
-            # All examples nested
             "examples": TensorDict(examples_data),
             
-            # Challenge and solution
-            "challenge": TensorDict({
-                "embedding": self.challenge.embedding if self.challenge.embedding is not None else torch.randn(1, 64),
-                "grid": self.challenge.grid,
-                "padded_grid": self.challenge.padded_grid,
-                "padded_augmented_grid": self.challenge.padded_augmented_grid,
-                "attributes": self.challenge.attributes,
-                "augmented_grid_embedding": self.challenge.augmented_grid_embedding if self.challenge.augmented_grid_embedding is not None else torch.randn(1, 64)
-            }),
+            "challenge": self.challenge.to_tensordict(),
             
-            "solution": TensorDict({
-                "embedding": self.solution.embedding if self.solution.embedding is not None else torch.randn(1, 64),
-                "grid": self.solution.grid,
-                "padded_grid": self.solution.padded_grid,
-                "padded_augmented_grid": self.solution.padded_augmented_grid,
-                "attributes": self.solution.attributes,
-                "augmented_grid_embedding": self.solution.augmented_grid_embedding if self.solution.augmented_grid_embedding is not None else torch.randn(1, 64)
-            })
+            "solution": self.solution.to_tensordict(),
+            "transformation_description": None,
+            "random_description": None
         })
         
         return arc_tensordict

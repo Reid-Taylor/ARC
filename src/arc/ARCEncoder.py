@@ -8,7 +8,6 @@ from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
 
-positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
 # NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
 # NetworkParameters = Dict[str, Union[List[torch.nn.Parameter], Dict[str, List[torch.nn.Parameter]]]]
 
