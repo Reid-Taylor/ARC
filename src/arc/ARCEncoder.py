@@ -145,7 +145,7 @@ class MultiTaskEncoder(L.LightningModule):
         
     def forward(self, x) -> Dict[str, Float[torch.Tensor, "..."]]:
         # Encode input grid into latent embedding space
-        z = self.online_encoder(x)['online_embedding']
+        z = self.online_encoder(x['encoded_grid'])
 
         # Reconstruct input grid from embedding
         x_hat = self.decoder(z)
@@ -161,7 +161,7 @@ class MultiTaskEncoder(L.LightningModule):
         c_tilde_hat = self.online_predictor(c)
 
         # Encode augmented input into the latent embedding space, using target encoder
-        z_tilde = self.target_encoder(x)['target_embedding'] 
+        z_tilde = self.target_encoder(x['padded_augmented_grid'])
         # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 
@@ -190,7 +190,7 @@ class MultiTaskEncoder(L.LightningModule):
         all_params = self._get_parameters()
 
         # Reconstruction Task Loss
-        reconstruction_loss = F.mse_loss(results["predicted_grid"], batch["padded_grid"])
+        reconstruction_loss = F.mse_loss(results["predicted_grid"], batch["encoded_grid"])
 
         key_to_idx = {
             'reconstruction_loss':0

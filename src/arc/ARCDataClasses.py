@@ -147,7 +147,6 @@ class ARCGrid:
         )
 
         self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
-
     
     @beartype
     def _apply_reflect(self) -> None:
@@ -246,11 +245,12 @@ class ARCProblemSet:
                 samples.append({
                     "name": problem.name,
                     "padded_grid": grid.padded_grid.squeeze(0),  # shape: (30, 30)
+                    "encoded_grid": grid.padded_grid.squeeze(0) + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),  # shape: (30, 30)
                     "embedding": grid.embedding.squeeze(0) if grid.embedding is not None else None,
                     "meta": grid.meta,
                     "attributes": grid.attributes.squeeze(0) if grid.attributes is not None else None,
                     "augmentation_set": grid.augmentation_config,
-                    "augmented_grid": grid.padded_augmented_grid
+                    "augmented_grid": grid.padded_augmented_grid + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),
                 })
         
         return {
@@ -297,6 +297,7 @@ class ARCProblemSet:
                     "embedding": example.input.embedding if example.input.embedding is not None else torch.randn(1, 64),
                     "grid": example.input.grid,
                     "padded_grid": example.input.padded_grid,
+                    "padded_augmented_grid": example.input.padded_augmented_grid,
                     "attributes": example.input.attributes,
                     "augmented_grid_embedding": example.input.augmented_grid_embedding if example.input.augmented_grid_embedding is not None else torch.randn(1, 64)
                 }),
@@ -304,6 +305,7 @@ class ARCProblemSet:
                     "embedding": example.output.embedding if example.output.embedding is not None else torch.randn(1, 64),
                     "grid": example.output.grid,
                     "padded_grid": example.output.padded_grid,
+                    "padded_augmented_grid": example.output.padded_augmented_grid,
                     "attributes": example.output.attributes,
                     "augmented_grid_embedding": example.output.augmented_grid_embedding if example.output.augmented_grid_embedding is not None else torch.randn(1, 64)
                 })
@@ -322,6 +324,7 @@ class ARCProblemSet:
                 "embedding": self.challenge.embedding if self.challenge.embedding is not None else torch.randn(1, 64),
                 "grid": self.challenge.grid,
                 "padded_grid": self.challenge.padded_grid,
+                "padded_augmented_grid": self.challenge.padded_augmented_grid,
                 "attributes": self.challenge.attributes,
                 "augmented_grid_embedding": self.challenge.augmented_grid_embedding if self.challenge.augmented_grid_embedding is not None else torch.randn(1, 64)
             }),
@@ -330,6 +333,7 @@ class ARCProblemSet:
                 "embedding": self.solution.embedding if self.solution.embedding is not None else torch.randn(1, 64),
                 "grid": self.solution.grid,
                 "padded_grid": self.solution.padded_grid,
+                "padded_augmented_grid": self.solution.padded_augmented_grid,
                 "attributes": self.solution.attributes,
                 "augmented_grid_embedding": self.solution.augmented_grid_embedding if self.solution.augmented_grid_embedding is not None else torch.randn(1, 64)
             })

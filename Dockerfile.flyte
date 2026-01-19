@@ -1,0 +1,33 @@
+# Dockerfile for ARC Encoder Training on Flyte
+FROM pytorch/pytorch:2.1.0-cuda11.8-cudnn8-runtime
+
+# Set working directory
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    curl \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
+COPY requirements-flyte.txt .
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements-flyte.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy the entire project
+COPY . .
+
+# Set PYTHONPATH to include src directory
+ENV PYTHONPATH="/app:${PYTHONPATH}"
+
+# Create necessary directories
+RUN mkdir -p /tmp/arc_encoder_model /tmp/lightning_logs
+
+# Set the default command
+CMD ["python", "-c", "print('ARC Encoder Flyte container ready')"]

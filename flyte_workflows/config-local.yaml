@@ -1,0 +1,18 @@
+# Local development configuration for Flyte
+admin:
+  endpoint: localhost:30081  # Default local Flyte endpoint
+  insecure: true
+
+storage:
+  type: default
+
+resources:
+  default:
+    cpu: "0.5"
+    memory: "1Gi"
+    storage: "2Gi"
+
+execution:
+  cluster: local
+  project: arc-training
+  domain: development
