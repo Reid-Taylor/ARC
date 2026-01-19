@@ -181,17 +181,27 @@ dependencies = [
     { name = "tqdm" },
 ]
 
+[package.optional-dependencies]
+gcp = [
+    { name = "google-auth" },
+    { name = "google-cloud-storage" },
+    { name = "psutil" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "beartype", specifier = ">=0.22.9" },
     { name = "flyte", specifier = ">=2.0.0b48" },
     { name = "flytekit", specifier = ">=1.16.12" },
+    { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.22.0" },
+    { name = "google-cloud-storage", marker = "extra == 'gcp'", specifier = ">=2.10.0" },
     { name = "ipykernel", specifier = ">=7.1.0" },
     { name = "jax", specifier = ">=0.8.2" },
     { name = "jaxtyping", specifier = ">=0.3.4" },
     { name = "lightning", specifier = ">=2.6.0" },
     { name = "numpy", specifier = ">=2.4.0" },
     { name = "pandas", specifier = ">=2.3.3" },
+    { name = "psutil", marker = "extra == 'gcp'", specifier = ">=5.9.0" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "tensorboard", specifier = ">=2.20.0" },
     { name = "tensordict", specifier = ">=0.10.0" },
@@ -200,6 +210,7 @@ requires-dist = [
     { name = "torchvision", specifier = ">=0.24.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
+provides-extras = ["gcp"]
 
 [[package]]
 name = "asttokens"

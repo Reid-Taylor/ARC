@@ -102,7 +102,7 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=2 if torch.cuda.is_available() else 0,
-        pin_memory=(get_device.type=="cuda")
+        pin_memory=(get_device().type=="cuda")
     )
     
     return dataloader
@@ -222,7 +222,7 @@ def setup_trainer(
 def main():
     """Main training function."""
     parser = argparse.ArgumentParser(description="Train ARC Encoder model")
-    parser.add_argument("--config", type=str, help="Path to config file")
+    parser.add_argument("--config", type=str, help="Name of config file")
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate")

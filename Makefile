@@ -1,5 +1,5 @@
-GITHUB_USERNAME ?= Reid-Taylor  # Replace with your GitHub username
-REGISTRY ?= ghcr.io/$(GITHUB_USERNAME)  # GitHub Container Registry (free)
+GITHUB_USERNAME ?= Reid-Taylor
+REGISTRY ?= ghcr.io/$(GITHUB_USERNAME)
 PROJECT ?= arc-training
 DOMAIN ?= development
 TAG ?= latest
@@ -8,14 +8,56 @@ TAG ?= latest
 EPOCHS ?= 1000
 BATCH_SIZE ?= 32
 LEARNING_RATE ?= 1e-3
-ALPHA ?= 0.85
+ALPHA ?= 0.90
 DATASET_PATH ?= training
 MODEL ?= encoder
 
-# Local testing
+gcp-create:
+    @echo "Creating GCP instance..."
+    gcloud compute instances create arc-training-vm \
+        --zone=us-central1-a \
+        --machine-type=n1-standard-4 \
+        --accelerator=type=nvidia-tesla-t4,count=1 \
+        --image-family=pytorch-latest-gpu \
+        --image-project=deeplearning-platform-release \
+        --boot-disk-size=100GB \
+        --maintenance-policy=TERMINATE
+		--restart-on-failure \
+		--metadata="install-nvidia-driver=True"
+
+gcp-start:
+    gcloud compute instances start arc-training-vm --zone=us-central1-a
+
+gcp-stop:
+    gcloud compute instances stop arc-training-vm --zone=us-central1-a
+
+gcp-ssh:
+    gcloud compute ssh arc-training-vm --zone=us-central1-a
+
+gcp-deploy:
+    @echo "Deploying code to GCP instance..."
+    gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=us-central1-a
+    gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && ./scripts/setup_gcp_instance.sh"
+
+gcp-train:
+    gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
+
+train-encoder:
+	@echo "Running full pipeline of ARC Encoder training..."
+	python scripts/train_encoder.py \
+		--config train_config \
+		--epochs $(EPOCHS) \
+		--batch-size $(BATCH_SIZE) \
+		--learning-rate $(LEARNING_RATE) \
+		--alpha $(ALPHA) \
+		--dataset-path $(DATASET_PATH) \
+		--model-save-path ./models/test \
+		--log-path ./logs/test
+
 local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	python scripts/train_encoder.py \
+		--config test_config \
 		--epochs 2 \
 		--batch-size 4 \
 		--learning-rate $(LEARNING_RATE) \
@@ -24,7 +66,6 @@ local-test-encoder:
 		--model-save-path ./models/test \
 		--log-path ./logs/test
 
-# Local testing
 local-test-transformer:
 	@echo "Running local test of ARC Encoder training..."
 	python scripts/train_transformer.py \
@@ -36,11 +77,9 @@ local-test-transformer:
 		--model-save-path ./models/test \
 		--log-path ./logs/test
 
-# View local results
 local-view-training:
 	tensorboard --logdir logs/test/arc_$(MODEL)
 
-# Clean up local artifacts
 clean:
 	@echo "Cleaning up local artifacts..."
 	rm -rf ./models/test
@@ -48,7 +87,6 @@ clean:
 	rm -rf lightning_logs/
 	docker image prune -f
 
-# Help target
 help:
 	@echo "Available targets:"
 	@echo "  test-local  - Test training script locally (quick test)"
