@@ -22,133 +22,55 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config
 from src.arc.ARCDataClasses import ARCProblemSet
-from src.arc.ARCEncoder import MultiTaskEncoder
-
+from src.arc.ARCTransformer import TransformationDescriber
 
 def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str):
-    encoder_config = config['model']['encoder']
+    training_config = config['training']['transformer']
+    shared_training_config = config['training']['shared']
     
-    all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_grids']
+    all_tensordicts = ARCProblemSet.load_from_data_directory(shared_training_config['dataset_path'])['list_of_tensordicts']
     
     def collate_fn(batch):
-        from src.arc.ARCEncoder import positional_encodings
-        
-        names = [item["name"] for item in batch]
-
-        padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
-
-        # Augmentation presence flags
-        roll_augmentations = torch.stack([torch.tensor("roll" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-        scale_grid_augmentations = torch.stack([torch.tensor("scale_grid" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-        isolate_color_augmentations = torch.stack([torch.tensor("isolate_color" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-
-        augmented_grids = torch.stack([item["augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
-
-        # Meta attributes
-        area = torch.stack([torch.tensor(item["meta"].area, dtype=torch.float32) for item in batch], dim=0).reshape(-1,1)
-        grid_size = torch.stack([torch.tensor(item["meta"].grid_size, dtype=torch.float32) for item in batch], dim=0).reshape(-1,2)
-        num_colors = torch.stack([torch.tensor(item["meta"].num_colors, dtype=torch.float32) for item in batch], dim=0)
-        color_map = torch.stack([torch.tensor(item["meta"].color_map, dtype=torch.float32) for item in batch], dim=0).reshape(-1,10)
-        
+        names = [item["problem_name"] for item in batch]
+        num_examples = torch.stack([item["num_examples"] for item in batch])
+        examples = torch.stack([item["examples"] for item in batch])
+        challenge = torch.stack([item["challenge"] for item in batch])
+        solution = torch.stack([item["solution"] for item in batch])
         
         return TensorDict(
             {
                 "name": names,
-
-                "padded_grid": padded_grids,
-                "encoded_grid": padded_grids + positional_encodings.reshape(-1, encoder_config['grid_size']),
-                "padded_augmented_grid": augmented_grids,
-                "predicted_grid": None,
-
-                "area": area,
-                "grid_size": grid_size,
-                "num_colors": num_colors,
-                "color_map": color_map,
-                
-                "predicted_area": None,
-                "predicted_grid_size": None,
-                "predicted_num_colors": None,
-                "predicted_color_map": None,
-
-                "presence_roll": roll_augmentations,
-                "presence_scale_grid": scale_grid_augmentations,
-                "presence_isolate_color": isolate_color_augmentations,
-                
-                "predicted_presence_roll": None,
-                "predicted_presence_scale_grid": None,
-                "predicted_presence_isolate_color": None,
-
-                "online_embedding": None,
-                "target_embedding": None,
-                "online_representation": None,
-                "target_representation": None,
-                "predicted_target_representation": None
+                "num_examples": num_examples,
+                "examples": examples,
+                "challenge": challenge,
+                "solution": solution,
+                "transformation_description":None,
+                "random_description":None
             },
             batch_size=len(batch)
         )
     
-    # Create dataloader
-    dataloader = torch.utils.data.DataLoader(
-        all_grids,
-        batch_size=batch_size,
+    return torch.utils.data.DataLoader(
+        all_tensordicts,
+        batch_size=training_config['batch_size'],
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=2 if torch.cuda.is_available() else 0
+        num_workers=0
     )
     
-    return dataloader
 
-
-def create_model(config: Dict[str, Any], learning_rate: float, alpha: float) -> MultiTaskEncoder:
+def create_model(config: Dict[str, Any], learning_rate: float, alpha: float) -> TransformationDescriber:
     """Create and initialize the model."""
-    encoder_config = config['model']['encoder']
-    downstream_attributes_config = config['model']['encoder']['downstream_attributes']
-    contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
     
-    model = MultiTaskEncoder(
-        attribute_requirements=list(downstream_attributes_config.keys()),
-        task_type={
-            key: contrastive_attributes_config[key]['task_type'] 
-            for key in contrastive_attributes_config.keys()
-        },
+    model = TransformationDescriber(
         learning_rate=learning_rate,
         alpha=alpha,
         **{
-            "Encoder": {
-                "input_size": encoder_config['grid_size'],
-                "attention_sizes": encoder_config['attention_sizes'],
-                "output_size": shared_model_config['latent_size']
-            },
-            "Decoder": {
+            "TransformationDescriber": {
                 "input_size": shared_model_config['latent_size'],
-                "attention_sizes": encoder_config['attention_sizes'],
-                "output_size": encoder_config['grid_size']
-            },
-            "Contrastive Projection": {
-                "input_size": shared_model_config['latent_size'],
-                "hidden_size": shared_model_config['latent_size'],
-                "output_size": shared_model_config['latent_size']
-            },
-            "Contrastive Predictor": {
-                "input_size": shared_model_config['latent_size'],
-                "output_size": shared_model_config['latent_size']
-            },
-            "Attribute Detector": {
-                key: {
-                    "input_size": shared_model_config['latent_size'],
-                    "output_size": 1,
-                    "activation": contrastive_attributes_config[key].get('activation', "sigmoid")
-                } for key in contrastive_attributes_config.keys() 
-                if contrastive_attributes_config[key].get('task_type', None) == 'task_sensitive'
-            },
-            "Attribute Head": {
-                key: {
-                    "input_size": shared_model_config['latent_size'],
-                    "hidden_size": downstream_attributes_config[key]['hidden_size'],
-                    "output_size": downstream_attributes_config[key]['output_size']
-                } for key in downstream_attributes_config.keys()
-            },
+                "output_size": shared_model_config['transformation_dimension_size']
+            }
         }
     )
     
@@ -170,7 +92,7 @@ def setup_trainer(
     # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
         dirpath=model_save_path,
-        filename="arc_encoder_{epoch:02d}_{val_loss:.2f}",
+        filename="arc_transformer_{epoch:02d}_{val_loss:.2f}",
         monitor="val_loss",
         mode="min",
         save_top_k=3,
@@ -186,7 +108,7 @@ def setup_trainer(
     # Setup logger
     logger = TensorBoardLogger(
         save_dir=log_path,
-        name="arc_encoder",
+        name="arc_transformer",
         version=f"train_{torch.randint(0, 10000, (1,)).item()}"
     )
     
@@ -212,14 +134,14 @@ def setup_trainer(
 
 def main():
     """Main training function."""
-    parser = argparse.ArgumentParser(description="Train ARC Encoder model")
+    parser = argparse.ArgumentParser(description="Train ARC Transformer model")
     parser.add_argument("--config", type=str, help="Path to config file")
     parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
     parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--alpha", type=float, default=0.85, help="Alpha parameter for multi-task learning")
     parser.add_argument("--dataset-path", type=str, default="training", help="Dataset path")
-    parser.add_argument("--model-save-path", type=str, default="./models/encoder", help="Model save path")
+    parser.add_argument("--model-save-path", type=str, default="./models/transformer", help="Model save path")
     parser.add_argument("--log-path", type=str, default="./lightning_logs", help="Logging path")
     parser.add_argument("--no-gpu", action="store_true", help="Disable GPU usage")
     parser.add_argument("--output-metrics", type=str, help="Path to save training metrics JSON")
