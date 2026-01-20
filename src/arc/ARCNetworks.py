@@ -44,7 +44,8 @@ class AttentionHead(torch.nn.Module):
         values = self.values(x)
 
         d_k = keys.size()[-1]
-        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+        d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=keys.device)
+        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(d_k_tensor)
         attention_weights = F.softmax(scores, dim=-1)
         attended_values = torch.matmul(attention_weights, values)
         return attended_values
@@ -155,8 +156,9 @@ class TransformationSpaceProjection(torch.nn.Module):
             meta_attended = F.relu(torch.matmul(input_query_key, output_query_key.transpose(-2,-1)))
 
             d_k = input_concatenated_mapped.size()[-1]
+            d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=input_concatenated_mapped.device)
 
-            result = torch.matmul(input_concatenated_mapped, meta_attended) / torch.sqrt(torch.tensor(d_k, dtype=torch.float32))
+            result = torch.matmul(input_concatenated_mapped, meta_attended) / torch.sqrt(d_k_tensor)
 
             result = torch.relu(self.final_map(result))
 

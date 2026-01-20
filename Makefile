@@ -23,21 +23,21 @@ gcp-create:
 		--restart-on-failure \
 
 gcp-start:
-	gcloud compute instances start arc-training-vm --zone=us-central1-a
+	gcloud compute instances start arc-training-vm --zone=us-central1-c
 
 gcp-stop:
-	gcloud compute instances stop arc-training-vm --zone=us-central1-a
+	gcloud compute instances stop arc-training-vm --zone=us-central1-c
 
 gcp-ssh:
-	gcloud compute ssh arc-training-vm --zone=us-central1-a
+	gcloud compute ssh arc-training-vm --zone=us-central1-c
 
 gcp-deploy:
 	@echo "Deploying code to GCP instance..."
-	gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=us-central1-a
-	gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && ./scripts/setup_gcp_instance.sh"
+	gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=us-central1-c
+	gcloud compute ssh arc-training-vm --zone=us-central1-c --command="cd ARC && ./scripts/setup_gcp_instance.sh"
 
 gcp-train:
-	gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
+	gcloud compute ssh arc-training-vm --zone=us-central1-c --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
 
 train-encoder:
 	@echo "Running full pipeline of ARC Encoder training..."
