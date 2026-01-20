@@ -13,34 +13,31 @@ DATASET_PATH ?= training
 MODEL ?= encoder
 
 gcp-create:
-    @echo "Creating GCP instance..."
-    gcloud compute instances create arc-training-vm \
-        --zone=us-central1-a \
-        --machine-type=n1-standard-4 \
-        --accelerator=type=nvidia-tesla-t4,count=1 \
-        --image-family=pytorch-latest-gpu \
-        --image-project=deeplearning-platform-release \
-        --boot-disk-size=100GB \
-        --maintenance-policy=TERMINATE
+	@echo "Creating GCP instance..."
+	gcloud compute instances create arc-training-vm \
+		--project amplified-hull-484821-b5 \
+		--zone=us-central1-c \
+		--machine-type n1-standard-4 \
+		--boot-disk-size 100GB \
+		--maintenance-policy TERMINATE \
 		--restart-on-failure \
-		--metadata="install-nvidia-driver=True"
 
 gcp-start:
-    gcloud compute instances start arc-training-vm --zone=us-central1-a
+	gcloud compute instances start arc-training-vm --zone=us-central1-a
 
 gcp-stop:
-    gcloud compute instances stop arc-training-vm --zone=us-central1-a
+	gcloud compute instances stop arc-training-vm --zone=us-central1-a
 
 gcp-ssh:
-    gcloud compute ssh arc-training-vm --zone=us-central1-a
+	gcloud compute ssh arc-training-vm --zone=us-central1-a
 
 gcp-deploy:
-    @echo "Deploying code to GCP instance..."
-    gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=us-central1-a
-    gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && ./scripts/setup_gcp_instance.sh"
+	@echo "Deploying code to GCP instance..."
+	gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=us-central1-a
+	gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && ./scripts/setup_gcp_instance.sh"
 
 gcp-train:
-    gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
+	gcloud compute ssh arc-training-vm --zone=us-central1-a --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
 
 train-encoder:
 	@echo "Running full pipeline of ARC Encoder training..."
