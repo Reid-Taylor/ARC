@@ -5,10 +5,10 @@ DOMAIN ?= development
 TAG ?= latest
 
 # Training parameters
-EPOCHS ?= 1000
-BATCH_SIZE ?= 32
+EPOCHS ?= 750
+BATCH_SIZE ?= 512
 LEARNING_RATE ?= 1e-3
-ALPHA ?= 0.90
+ALPHA ?= 0.75
 DATASET_PATH ?= training
 MODEL ?= encoder
 
