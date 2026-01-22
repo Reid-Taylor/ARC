@@ -5,7 +5,7 @@ DOMAIN ?= development
 TAG ?= latest
 
 # Training parameters
-EPOCHS ?= 750
+EPOCHS ?= 250
 BATCH_SIZE ?= 512
 LEARNING_RATE ?= 1e-3
 ALPHA ?= 0.75
@@ -56,7 +56,7 @@ local-test-encoder:
 	python scripts/train_encoder.py \
 		--config test_config \
 		--epochs 2 \
-		--batch-size 4 \
+		--batch-size $(BATCH_SIZE) \
 		--learning-rate $(LEARNING_RATE) \
 		--alpha $(ALPHA) \
 		--dataset-path $(DATASET_PATH) \

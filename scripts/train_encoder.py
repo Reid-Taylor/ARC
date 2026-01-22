@@ -39,6 +39,7 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
     encoder_config = config['model']['encoder']
     
     all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_grids']
+    num_samples = len(all_grids)
     
     def collate_fn(batch):
         names = [item["name"] for item in batch]
@@ -96,8 +97,17 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
         )
     
     # Create dataloader
-    dataloader = torch.utils.data.DataLoader(
-        all_grids,
+    train_dataloader = torch.utils.data.DataLoader(
+        all_grids[:int(0.9*num_samples)],
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+        num_workers=2 if torch.cuda.is_available() else 0,
+        pin_memory=(get_device().type=="cuda")
+    )
+    # Create dataloader
+    val_dataloader = torch.utils.data.DataLoader(
+        all_grids[int(0.9*num_samples):],
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
@@ -105,7 +115,7 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
         pin_memory=(get_device().type=="cuda")
     )
     
-    return dataloader
+    return train_dataloader, val_dataloader
 
 
 def create_model(config: Dict[str, Any], learning_rate: float, alpha: float) -> MultiTaskEncoder:
@@ -188,7 +198,7 @@ def setup_trainer(
     
     early_stopping = EarlyStopping(
         monitor="val_loss",
-        patience=5,
+        patience=4,
         mode="min"
     )
     
@@ -211,7 +221,8 @@ def setup_trainer(
         accelerator=accelerator,
         devices=devices,
         log_every_n_steps=10,
-        val_check_interval=0.25,
+        # val_check_interval=0.25,
+        check_val_every_n_epoch=2,
         enable_progress_bar=True,
         enable_model_summary=True
     )
@@ -252,8 +263,8 @@ def main():
     
     # Create dataloader
     print("Loading dataset...")
-    dataloader = create_dataloader(config, args.batch_size, args.dataset_path)
-    print(f"Dataset loaded with {len(dataloader)} batches")
+    train_dataloader, val_dataloaders = create_dataloader(config, args.batch_size, args.dataset_path)
+    print(f"Dataset loaded with {len(train_dataloader)} batches")
     
     # Create model
     print("Initializing model...")
@@ -271,7 +282,7 @@ def main():
     
     # Train model
     print("Starting training...")
-    trainer.fit(model=model, train_dataloaders=dataloader)
+    trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=None)
     
     # Save training metrics
     if args.output_metrics:

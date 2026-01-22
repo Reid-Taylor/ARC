@@ -310,9 +310,18 @@ class MultiTaskEncoder(L.LightningModule):
             {
                 "train/total_loss": loss_total.detach(),
                 "train/loss_grad": loss_grad.detach(),
+                "train/reconstruction_loss": reconstruction_loss.detach(),
+                "train/attribute_prediction_loss": torch.stack(downstream_attribute_loss).detach().mean(),
+                "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean(),
+                "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean(),
+                "val_loss": loss_total.detach(),
             },
             prog_bar=True
         )
+
+    def validation_step(self): 
+        # on a besoin d'un val_dataloader
+        pass
 
     def configure_optimizers(self):
         params = self._get_parameters()
