@@ -142,7 +142,7 @@ class MultiTaskEncoder(L.LightningModule):
         w = self.num_tasks * w / w.sum()
         return w
         
-    def forward(self, x) -> Dict[str, Float[torch.Tensor, "..."]]:
+    def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
         # Encode input grid into latent embedding space
         z = self.online_encoder(x['encoded_grid'])
 
@@ -169,7 +169,7 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.task_sensitives:
             attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
 
-        results = {
+        standard_forward = {
             "online_embedding": z,
             "target_embedding": z_tilde,
             "online_representation": c,
@@ -178,6 +178,47 @@ class MultiTaskEncoder(L.LightningModule):
             "predicted_grid": x_hat,
             "predicted_downstream_attributes": y_hat,
             "predicted_task_sensitive_attributes": attribute_detections
+        }
+
+        z = self.online_encoder(x['padded_augmented_grid'])
+
+        # Reconstruct input grid from embedding
+        x_hat = self.decoder(z)
+
+        # Predict attributes from embedding
+        y_hat = {}
+        for key in self.downstream_attributes:
+            y_hat[key] = getattr(self, f"attribute_head_{key}")(z)
+
+        # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
+        c = self.online_projector(z)
+        # Prediction of c_tilde given c
+        c_tilde_hat = self.online_predictor(c)
+
+        # Encode augmented input into the latent embedding space, using target encoder
+        z_tilde = self.target_encoder(x['encoded_grid'])
+        # We project the latent embedding into the contrastive learning latent space
+        c_tilde = self.target_projector(z_tilde)
+
+        # Predict task-sensitive attributes from our contrastive representation. We want to discriminate these well, to enforce structure upon our latent space.
+        attribute_detections = {}
+        for key in self.task_sensitives:
+            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
+
+        mirrored_forward = {
+            "online_embedding": z,
+            "target_embedding": z_tilde,
+            "online_representation": c,
+            "target_representation": c_tilde,
+            "predicted_target_representation": c_tilde_hat,
+            "predicted_grid": x_hat,
+            "predicted_downstream_attributes": y_hat,
+            "predicted_task_sensitive_attributes": attribute_detections
+        }
+
+        results = {
+            "standard":standard_forward,
+            "mirrored":mirrored_forward,
         }
 
         return results
@@ -189,7 +230,10 @@ class MultiTaskEncoder(L.LightningModule):
         all_params = self._get_parameters()
 
         # Reconstruction Task Loss
-        reconstruction_loss = F.mse_loss(results["predicted_grid"], batch["encoded_grid"])
+        reconstruction_loss = 0.5 * \
+            (F.mse_loss(results['standard']["predicted_grid"], batch["encoded_grid"]) 
+                + 
+            F.mse_loss(results['mirrored']["predicted_grid"], batch["encoded_grid"]))
 
         key_to_idx = {
             'reconstruction_loss':0
@@ -200,10 +244,14 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.downstream_attributes:
             key_to_idx[f'downstream_{key}'] = len(key_to_idx)
             downstream_attribute_loss.append(
-                F.mse_loss(
-                    results["predicted_downstream_attributes"][key],
+                (F.mse_loss(
+                    results["standard"]["predicted_downstream_attributes"][key],
                     batch[key]
-                )
+                ) + 
+                F.mse_loss(
+                    results["mirrored"]["predicted_downstream_attributes"][key],
+                    batch[key]
+                )) * 0.5
             ) 
 
         # Task Sensitive Attribute Detection Loss
@@ -211,10 +259,14 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.task_sensitives:
             key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
             task_sensitive_loss.append(
-                F.binary_cross_entropy(
-                    results["predicted_task_sensitive_attributes"][key], 
+                (F.binary_cross_entropy(
+                    results['standard']["predicted_task_sensitive_attributes"][key], 
                     batch[f"presence_{key}"]
-                )
+                ) + 
+                F.binary_cross_entropy(
+                    results['mirrored']["predicted_task_sensitive_attributes"][key], 
+                    batch[f"presence_{key}"]
+                )) * 0.5
             )
         
         # Task Invariant Loss
@@ -222,10 +274,14 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.task_invariants:
             key_to_idx[f'invariant_{key}'] = len(key_to_idx)
             task_invariant_loss.append(
+                (F.mse_loss(
+                    results['standard']["online_representation"], 
+                    results['standard']["target_representation"].detach()
+                ) + 
                 F.mse_loss(
-                    results["online_representation"], 
-                    results["target_representation"].detach()
-                )
+                    results['mirrored']["online_representation"], 
+                    results['mirrored']["target_representation"].detach()
+                ))*0.5
             )
 
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
@@ -319,9 +375,6 @@ class MultiTaskEncoder(L.LightningModule):
             prog_bar=True
         )
 
-    def validation_step(self): 
-        # on a besoin d'un val_dataloader
-        pass
 
     def configure_optimizers(self):
         params = self._get_parameters()
