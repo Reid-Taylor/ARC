@@ -370,10 +370,82 @@ class MultiTaskEncoder(L.LightningModule):
                 "train/attribute_prediction_loss": torch.stack(downstream_attribute_loss).detach().mean(),
                 "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean(),
                 "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean(),
+            },
+            prog_bar=True
+        )
+
+    def validation_step(self, batch):
+
+        results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
+
+        # Reconstruction Task Loss
+        reconstruction_loss = 0.5 * \
+            (F.mse_loss(results['standard']["predicted_grid"], batch["encoded_grid"]) 
+                + 
+            F.mse_loss(results['mirrored']["predicted_grid"], batch["encoded_grid"]))
+
+        key_to_idx = {
+            'reconstruction_loss':0
+        }
+
+        # Downstream Attribute Recovery Task Loss
+        downstream_attribute_loss = []
+        for key in self.downstream_attributes:
+            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
+            downstream_attribute_loss.append(
+                (F.mse_loss(
+                    results["standard"]["predicted_downstream_attributes"][key],
+                    batch[key]
+                ) + 
+                F.mse_loss(
+                    results["mirrored"]["predicted_downstream_attributes"][key],
+                    batch[key]
+                )) * 0.5
+            ) 
+
+        # Task Sensitive Attribute Detection Loss
+        task_sensitive_loss = []
+        for key in self.task_sensitives:
+            key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
+            task_sensitive_loss.append(
+                (F.binary_cross_entropy(
+                    results['standard']["predicted_task_sensitive_attributes"][key], 
+                    batch[f"presence_{key}"]
+                ) + 
+                F.binary_cross_entropy(
+                    results['mirrored']["predicted_task_sensitive_attributes"][key], 
+                    batch[f"presence_{key}"]
+                )) * 0.5
+            )
+        
+        # Task Invariant Loss
+        task_invariant_loss = []
+        for key in self.task_invariants:
+            key_to_idx[f'invariant_{key}'] = len(key_to_idx)
+            task_invariant_loss.append(
+                (F.mse_loss(
+                    results['standard']["online_representation"], 
+                    results['standard']["target_representation"].detach()
+                ) + 
+                F.mse_loss(
+                    results['mirrored']["online_representation"], 
+                    results['mirrored']["target_representation"].detach()
+                ))*0.5
+            )
+
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+
+        w = self._task_weights()
+        loss_total = torch.sum((w * loss))
+
+        self.log_dict(
+            {
                 "val_loss": loss_total.detach(),
             },
             prog_bar=True
         )
+        
+        return loss_total.detach() # The output can be used in validation_epoch_end
 
 
     def configure_optimizers(self):

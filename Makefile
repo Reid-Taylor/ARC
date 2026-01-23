@@ -3,6 +3,7 @@ REGISTRY ?= ghcr.io/$(GITHUB_USERNAME)
 PROJECT ?= arc-training
 DOMAIN ?= development
 TAG ?= latest
+GCP_ZONE ?= us-central1-c
 
 # Training parameters
 EPOCHS ?= 250
@@ -16,28 +17,28 @@ gcp-create:
 	@echo "Creating GCP instance..."
 	gcloud compute instances create arc-training-vm \
 		--project amplified-hull-484821-b5 \
-		--zone=us-central1-c \
+		--zone=$(GCP_ZONE) \
 		--machine-type n1-standard-4 \
 		--boot-disk-size 100GB \
 		--maintenance-policy TERMINATE \
 		--restart-on-failure \
 
 gcp-start:
-	gcloud compute instances start arc-training-vm --zone=us-central1-c
+	gcloud compute instances start arc-training-vm --zone=$(GCP_ZONE)
 
 gcp-stop:
-	gcloud compute instances stop arc-training-vm --zone=us-central1-c
+	gcloud compute instances stop arc-training-vm --zone=$(GCP_ZONE)
 
 gcp-ssh:
-	gcloud compute ssh arc-training-vm --zone=us-central1-c
+	gcloud compute ssh arc-training-vm --zone=$(GCP_ZONE)
 
 gcp-deploy:
 	@echo "Deploying code to GCP instance..."
-	gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=us-central1-c
-	gcloud compute ssh arc-training-vm --zone=us-central1-c --command="cd ARC && ./scripts/setup_gcp_instance.sh"
+	gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=$(GCP_ZONE)
+	gcloud compute ssh arc-training-vm --zone=$(GCP_ZONE) --command="cd ARC && ./scripts/setup_gcp_instance.sh"
 
 gcp-train:
-	gcloud compute ssh arc-training-vm --zone=us-central1-c --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
+	gcloud compute ssh arc-training-vm --zone=$(GCP_ZONE) --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
 
 train-encoder:
 	@echo "Running full pipeline of ARC Encoder training..."
