@@ -220,7 +220,7 @@ def setup_trainer(
         logger=logger,
         accelerator=accelerator,
         devices=devices,
-        log_every_n_steps=10,
+        log_every_n_steps=1,
         # val_check_interval=0.25,
         check_val_every_n_epoch=2,
         enable_progress_bar=True,
