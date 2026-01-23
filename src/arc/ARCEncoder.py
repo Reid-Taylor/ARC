@@ -374,7 +374,7 @@ class MultiTaskEncoder(L.LightningModule):
             prog_bar=True
         )
 
-    def validation_step(self, batch):
+    def validation_step(self, batch, batch_idx):
 
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
@@ -444,9 +444,6 @@ class MultiTaskEncoder(L.LightningModule):
             },
             prog_bar=True
         )
-        
-        return loss_total.detach() # The output can be used in validation_epoch_end
-
 
     def configure_optimizers(self):
         params = self._get_parameters()
