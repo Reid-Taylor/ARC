@@ -282,7 +282,7 @@ def main():
     
     # Train model
     print("Starting training...")
-    trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=None)
+    trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloaders)
     
     # Save training metrics
     if args.output_metrics:
