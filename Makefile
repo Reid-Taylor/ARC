@@ -7,9 +7,9 @@ GCP_ZONE ?= us-central1-c
 
 # Training parameters
 EPOCHS ?= 250
-BATCH_SIZE ?= 512
-LEARNING_RATE ?= 1e-3
-ALPHA ?= 0.75
+BATCH_SIZE ?= 1450
+LEARNING_RATE ?= 5e-3
+ALPHA ?= 0.80
 DATASET_PATH ?= training
 MODEL ?= encoder
 

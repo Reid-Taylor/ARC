@@ -11,7 +11,7 @@ grid_size = 900
 attention_sizes = [512, 1024, 1024]
 hidden_attr_size = 1024
 learning_rate = 0.001
-alpha = 0.75
+alpha = 0.80
 learning_rate_w = 0.005
 [model.encoder.downstream_attributes]
 area = {hidden_size = 512, output_size = 1}
@@ -31,7 +31,7 @@ isolate_color = {task_type = "task_sensitive", activation = "sigmoid"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 512
+batch_size = 1450
 epochs = 250
 [training.transformer]
 batch_size = 1

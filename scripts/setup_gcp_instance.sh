@@ -7,7 +7,6 @@ echo "🚀 Setting up ARC training environment on GCP..."
 
 sudo apt-get update
 sudo apt-get install -y git htop make tmux
-#nvtop
 
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source $HOME/.local/bin/env
@@ -30,3 +29,6 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}'); 
 echo "✅ Setup complete! Ready for training."
 
 tmux new-session -d -s training
+source .venv/bin/activate
+
+#gsutil cp -r gs://your-bucket/models/encoder ./local_models/
