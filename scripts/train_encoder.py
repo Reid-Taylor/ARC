@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone training script for ARC Encoder that can be executed independently
-or called from Flyte workflows.
+Standalone training script for ARC Encoder that can be executed independently.
 """
 import argparse
 import sys
@@ -140,6 +139,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
         },
         learning_rate=learning_rate,
         alpha=alpha,
+        tau=config['model']['encoder']['tau'],
         **{
             "Encoder": {
                 "input_size": encoder_config['grid_size'],

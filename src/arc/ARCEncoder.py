@@ -19,6 +19,7 @@ class MultiTaskEncoder(L.LightningModule):
             task_type: Dict[str, str], 
             learning_rate:float=1e-3, 
             alpha:float=0.85, 
+            tau:float=0.85,
             **network_dimensions
         ) -> None:
         super().__init__()
@@ -112,6 +113,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.lr: float = learning_rate
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.alpha: float = alpha
+        self.tau:float = tau
 
         self.register_buffer("L0", torch.zeros(self.num_tasks))
         self.L0_initialized: bool = False
@@ -355,11 +357,10 @@ class MultiTaskEncoder(L.LightningModule):
         opt_w.step()
 
         # Manually update target network with exponential moving average of online network. 
-        tau = 0.95
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
-            param_t.data = tau * param_t.data + (1 - tau) * param_o.data
+            param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
         for param_o, param_t in zip(all_params.get("online_projector"), all_params.get("target_projector")):
-            param_t.data = tau * param_t.data + (1 - tau) * param_o.data
+            param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
 
         # Log metrics and updates
         self.log_dict(

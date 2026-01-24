@@ -1,23 +1,20 @@
 [model]
 [model.shared]
-latent_size = 64
-transformation_dimension_size = 256
+latent_size = 10
+transformation_dimension_size = 10
+[model.encoder]
+grid_size = 900
+attention_sizes = [10, 10, 10]
+learning_rate = 0.001
+alpha = 0.80
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
-learning_rate_w = 0.005
-[model.encoder]
-grid_size = 900
-attention_sizes = [32, 64, 128]
-hidden_attr_size = 96
-learning_rate = 0.001
-alpha = 0.9
-learning_rate_w = 0.005
 [model.encoder.downstream_attributes]
-area = {hidden_size = 96, output_size = 1}
-grid_size = {hidden_size = 96, output_size = 2}
-num_colors = {hidden_size = 96, output_size = 1}
-color_map = {hidden_size = 96, output_size = 10}
+area = {hidden_size = 10, output_size = 1}
+grid_size = {hidden_size = 10, output_size = 2}
+num_colors = {hidden_size = 10, output_size = 1}
+color_map = {hidden_size = 10, output_size = 10}
 [model.encoder.contrastive_attributes]
 area = {task_type = "task_invariant"}
 color_map = {task_type = "task_invariant"}
@@ -31,8 +28,8 @@ isolate_color = {task_type = "task_sensitive", activation = "sigmoid"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 31
-epochs = 1
+batch_size = 10
+epochs = 2
 [training.transformer]
 batch_size = 1
 epochs = 1

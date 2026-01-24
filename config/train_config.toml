@@ -1,23 +1,21 @@
 [model]
 [model.shared]
-latent_size = 1344
-transformation_dimension_size = 256
-[model.transformer]
-learning_rate = 0.001
-alpha = 0.9
-learning_rate_w = 0.005
+latent_size = 256
+transformation_dimension_size = 512
 [model.encoder]
 grid_size = 900
 attention_sizes = [512, 1024, 1024]
-hidden_attr_size = 1024
 learning_rate = 0.001
 alpha = 0.80
-learning_rate_w = 0.005
+tau = 0.85
+[model.transformer]
+learning_rate = 0.001
+alpha = 0.9
 [model.encoder.downstream_attributes]
-area = {hidden_size = 512, output_size = 1}
-grid_size = {hidden_size = 512, output_size = 2}
-num_colors = {hidden_size = 512, output_size = 1}
-color_map = {hidden_size = 512, output_size = 10}
+area = {hidden_size = 128, output_size = 1}
+grid_size = {hidden_size = 128, output_size = 2}
+num_colors = {hidden_size = 128, output_size = 1}
+color_map = {hidden_size = 128, output_size = 10}
 [model.encoder.contrastive_attributes]
 area = {task_type = "task_invariant"}
 color_map = {task_type = "task_invariant"}
