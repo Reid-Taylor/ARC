@@ -20,20 +20,15 @@ positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / 
 
 @beartype
 class AugmentationConfig:
-    num_augmentations: int = 3
+    num_augmentations: int = None
     augmentation_set: list[str]
-    def __init__(self, num_augmentations: int = 3) -> None:
-        self.num_augmentations = num_augmentations
-        augmentation_set = self._augmentation_set()
-        augmentation_probabilities = self._get_augmentation_probabilities()
-        self.augmentation_set: list[str] = [aug for aug, prob in zip(augmentation_set, augmentation_probabilities) if prob]
+    def __init__(self) -> None:
+        self.num_augmentations = torch.randint(1, 6, (1,)).item()
+        self.augmentation_set: list[str] = self._augmentation_set()
 
     def _augmentation_set(self) -> list[str]:
         return sample(AUGMENTATIONS, counts=[10] * len(AUGMENTATIONS),k=self.num_augmentations)
-    
-    def _get_augmentation_probabilities(self) -> torch.Tensor:
-        return torch.rand(self.num_augmentations) >= 0.25
-    
+        
     def __str__(self) -> str:
         return f"AugmentationConfig(num_augmentations={len(self.augmentation_set)}) of [{', '.join(self.augmentation_set)}]"
     
