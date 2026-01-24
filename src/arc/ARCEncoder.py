@@ -106,7 +106,8 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_invariants)
+        # self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_invariants)
+        self.num_tasks: int = 1 + len(self.task_sensitives) + len(self.task_invariants)
         # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + task invariant attribute tasks
         
         self.lr: float = learning_rate
@@ -242,7 +243,7 @@ class MultiTaskEncoder(L.LightningModule):
         # Downstream Attribute Recovery Task Loss
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
-            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
+            # key_to_idx[f'downstream_{key}'] = len(key_to_idx)
             downstream_attribute_loss.append(
                 (F.mse_loss(
                     results["standard"]["predicted_downstream_attributes"][key],
@@ -284,7 +285,8 @@ class MultiTaskEncoder(L.LightningModule):
                 ))*0.5
             )
 
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+        # loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+        loss = torch.stack([reconstruction_loss] + task_sensitive_loss + task_invariant_loss)
 
         # Initialize L0 if not already done
         if (not self.L0_initialized):
@@ -314,11 +316,11 @@ class MultiTaskEncoder(L.LightningModule):
         )
         
         # Attribute prediction tasks gradient norms
-        for attribute in self.downstream_attributes:
-            G.append(_get_gradient(
-                w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
-                all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
-            ))
+        # for attribute in self.downstream_attributes:
+        #     G.append(_get_gradient(
+        #         w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
+        #         all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute) #TODO What if we only trained this section of the network upon the attribute heads?
+        #     ))
         
         # Attribute detection tasks gradient norms
         for key in self.task_sensitives:
@@ -355,7 +357,7 @@ class MultiTaskEncoder(L.LightningModule):
         opt_w.step()
 
         # Manually update target network with exponential moving average of online network. 
-        tau = 0.95
+        tau = 0.95 #TODO Need to parameterize this into the config
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
             param_t.data = tau * param_t.data + (1 - tau) * param_o.data
         for param_o, param_t in zip(all_params.get("online_projector"), all_params.get("target_projector")):
@@ -389,19 +391,19 @@ class MultiTaskEncoder(L.LightningModule):
         }
 
         # Downstream Attribute Recovery Task Loss
-        downstream_attribute_loss = []
-        for key in self.downstream_attributes:
-            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
-            downstream_attribute_loss.append(
-                (F.mse_loss(
-                    results["standard"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                ) + 
-                F.mse_loss(
-                    results["mirrored"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                )) * 0.5
-            ) 
+        # downstream_attribute_loss = []
+        # for key in self.downstream_attributes:
+        #     key_to_idx[f'downstream_{key}'] = len(key_to_idx)
+        #     downstream_attribute_loss.append(
+        #         (F.mse_loss(
+        #             results["standard"]["predicted_downstream_attributes"][key],
+        #             batch[key]
+        #         ) + 
+        #         F.mse_loss(
+        #             results["mirrored"]["predicted_downstream_attributes"][key],
+        #             batch[key]
+        #         )) * 0.5
+        #     ) 
 
         # Task Sensitive Attribute Detection Loss
         task_sensitive_loss = []
@@ -433,7 +435,8 @@ class MultiTaskEncoder(L.LightningModule):
                 ))*0.5
             )
 
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+        # loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+        loss = torch.stack([reconstruction_loss] + task_sensitive_loss + task_invariant_loss)
 
         w = self._task_weights()
         loss_total = torch.sum((w * loss))

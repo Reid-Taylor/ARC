@@ -34,7 +34,7 @@ class AttentionHead(torch.nn.Module):
     """
     def __init__(self, input_dim:int, head_dim:int, output_dim:int):
         super().__init__()
-        self.keys = torch.nn.Linear(input_dim, head_dim)
+        self.keys = torch.nn.Linear(input_dim, head_dim) #TODO Should we self-attend by setting the key to a single color channel of the input???
         self.queries = torch.nn.Linear(input_dim, head_dim)
         self.values = torch.nn.Linear(input_dim, output_dim)
 
@@ -65,7 +65,7 @@ class AttributeHead(torch.nn.Module):
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
         x = F.relu(self.fc1(x))
         x = self.attention(x)
-        x = self.fc2(x)
+        x = self.fc2(x) # TODO: Relu here before finishing?
         return x
 
 @beartype
