@@ -128,7 +128,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
     downstream_attributes_config = config['model']['encoder']['downstream_attributes']
     contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
-    learning_rate: float = config['model'['encoder']['learning_rate']]
+    learning_rate: float = config['model']['encoder']['learning_rate']
     alpha: float = config['model']['encoder']['alpha']
     
     model = MultiTaskEncoder(

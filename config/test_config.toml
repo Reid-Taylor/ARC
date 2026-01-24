@@ -7,6 +7,7 @@ grid_size = 900
 attention_sizes = [10, 10, 10]
 learning_rate = 0.001
 alpha = 0.80
+tau = 0.85
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
