@@ -57,7 +57,6 @@ clean:
 	rm -rf ./models/test
 	rm -rf ./logs/test
 	rm -rf lightning_logs/
-	docker image prune -f
 
 help:
 	@echo "Available targets:"
