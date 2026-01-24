@@ -27,7 +27,7 @@ class MultiTaskEncoder(L.LightningModule):
             Encoder(
                 **network_dimensions["Encoder"]
             ),
-            in_keys=["encoded_grid"],
+            in_keys=["encoded_grid","padded_grid"],
             out_keys=["online_embedding"]
         )
         self.online_projector = TensorDictModule(
@@ -43,7 +43,7 @@ class MultiTaskEncoder(L.LightningModule):
             Encoder(
                 **network_dimensions["Encoder"]
             ),
-            in_keys=["encoded_grid"],
+            in_keys=["encoded_grid", "padded_grid"],
             out_keys=["target_embedding"]
         )
         self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
@@ -144,7 +144,7 @@ class MultiTaskEncoder(L.LightningModule):
         
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
         # Encode input grid into latent embedding space
-        z = self.online_encoder(x['encoded_grid'])
+        z = self.online_encoder(x['encoded_grid'], x['padded_grid'])
 
         # Reconstruct input grid from embedding
         x_hat = self.decoder(z)
@@ -160,7 +160,7 @@ class MultiTaskEncoder(L.LightningModule):
         c_tilde_hat = self.online_predictor(c)
 
         # Encode augmented input into the latent embedding space, using target encoder
-        z_tilde = self.target_encoder(x['padded_augmented_grid'])
+        z_tilde = self.target_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
         # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 
@@ -180,7 +180,7 @@ class MultiTaskEncoder(L.LightningModule):
             "predicted_task_sensitive_attributes": attribute_detections
         }
 
-        z = self.online_encoder(x['padded_augmented_grid'])
+        z = self.online_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
 
         # Reconstruct input grid from embedding
         x_hat = self.decoder(z)
@@ -196,7 +196,7 @@ class MultiTaskEncoder(L.LightningModule):
         c_tilde_hat = self.online_predictor(c)
 
         # Encode augmented input into the latent embedding space, using target encoder
-        z_tilde = self.target_encoder(x['encoded_grid'])
+        z_tilde = self.target_encoder(x['encoded_grid'], x['padded_grid'])
         # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 

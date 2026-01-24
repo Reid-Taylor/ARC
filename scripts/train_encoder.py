@@ -45,13 +45,15 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
         names = [item["name"] for item in batch]
 
         padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
+        encoded_grids = torch.stack([item["encoded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
 
         # Augmentation presence flags
         roll_augmentations = torch.stack([torch.tensor("roll" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
         scale_grid_augmentations = torch.stack([torch.tensor("scale_grid" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
         isolate_color_augmentations = torch.stack([torch.tensor("isolate_color" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
 
-        augmented_grids = torch.stack([item["augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
+        padded_augmented_grids = torch.stack([item["padded_augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
+        encoded_augmented_grids = torch.stack([item["encoded_augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
 
         # Meta attributes
         area = torch.stack([torch.tensor(item["meta"].area, dtype=torch.float32) for item in batch], dim=0).reshape(-1,1)
@@ -64,8 +66,9 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
                 "name": names,
 
                 "padded_grid": padded_grids,
-                "encoded_grid": padded_grids,
-                "padded_augmented_grid": augmented_grids,
+                "encoded_grid": encoded_grids,
+                "padded_augmented_grid": padded_augmented_grids,
+                "encoded_augmented_grid": encoded_augmented_grids,
                 "predicted_grid": None,
 
                 "area": area,
@@ -109,7 +112,7 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
     val_dataloader = torch.utils.data.DataLoader(
         all_grids[int(0.9*num_samples):],
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False,
         collate_fn=collate_fn,
         num_workers=2 if torch.cuda.is_available() else 0,
         pin_memory=(get_device().type=="cuda")

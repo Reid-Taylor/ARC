@@ -9,7 +9,7 @@ class FullyConnectedLayer(torch.nn.Module):
     """
     A fully connected layer which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str, input_size:int=64, output_size:int=10, activation:str='relu'):
+    def __init__(self, name:str=None, input_size:int=64, output_size:int=10, activation:str='relu'):
         super().__init__()
         self.name:str = name
         self.fc1 = torch.nn.Linear(input_size, output_size)
@@ -39,9 +39,32 @@ class AttentionHead(torch.nn.Module):
         self.values = torch.nn.Linear(input_dim, output_dim)
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B T"]:
-        keys = self.keys(x)
-        queries = self.queries(x)
-        values = self.values(x)
+        keys = F.relu(self.keys(x))
+        queries = F.relu(self.queries(x))
+        values = F.relu(self.values(x))
+
+        d_k = keys.size()[-1]
+        d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=keys.device)
+        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(d_k_tensor)
+        attention_weights = F.softmax(scores, dim=-1)
+        attended_values = torch.matmul(attention_weights, values)
+        return attended_values
+    
+@beartype
+class SelfAttentionHead(torch.nn.Module):
+    """
+    Naive implementation of a self-attention head.
+    """
+    def __init__(self, input_dim:int, head_dim:int, output_dim:int):
+        super().__init__()
+        self.keys = torch.nn.Linear(input_dim, head_dim)
+        self.queries = torch.nn.Linear(input_dim, head_dim)
+        self.values = torch.nn.Linear(input_dim, output_dim)
+
+    def forward(self, global_view:torch.Tensor, local_view:torch.Tensor) -> Float[torch.Tensor, "B T"]:
+        keys = F.relu(self.keys(local_view))
+        queries = F.relu(self.queries(global_view))
+        values = F.relu(self.values(global_view))
 
         d_k = keys.size()[-1]
         d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=keys.device)
@@ -78,22 +101,32 @@ class Encoder(torch.nn.Module):
 
         attention_input, attention_head, attention_output = attention_sizes
 
-        self.l1 = torch.nn.Linear(input_size, attention_input)
+        self.channel_projectors = [FullyConnectedLayer(input_size=input_size, output_size=attention_input) for _ in range(10)]
+        self.global_projector = FullyConnectedLayer(input_size=input_size, output_size=attention_input)
 
-        self.head_1 = AttentionHead(attention_input, attention_head, attention_output)
-        self.head_2 = AttentionHead(attention_input, attention_head, attention_output)
-        self.head_3 = AttentionHead(attention_input, attention_head, attention_output)
+        self.heads = [SelfAttentionHead(attention_input, attention_head, attention_output) for _ in range(10)]
+
+        self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size)
+
+    def forward(self, encoded_grid, padded_grid) -> Float[torch.Tensor, "B D"]:
+
+        the_attended = []
+
+        encoded_grid_projection = self.global_projector(encoded_grid)
+
+        for i in range(10):
+            the_attended.append(
+                self.heads[i](
+                    global_view=encoded_grid_projection,
+                    local_view=torch.where(
+                        torch.eq(self.channel_projectors[i](padded_grid), i+1),
+                        i+1,
+                        0
+                    ).to(torch.float32)
+                )
+            )
         
-        self.fc_out = torch.nn.Linear(attention_output*3, output_size)
-
-    def forward(self, x) -> Float[torch.Tensor, "B D"]:
-        encoded_input = F.relu(self.l1(x))
-
-        attended_input_1: torch.Tensor = self.head_1(encoded_input)
-        attended_input_2: torch.Tensor = self.head_2(encoded_input)
-        attended_input_3: torch.Tensor = self.head_3(F.leaky_relu(encoded_input))
-
-        attended_layers = torch.cat((attended_input_1, attended_input_2, attended_input_3), dim=-1)
+        attended_layers = torch.cat(the_attended, dim=-1)
 
         return self.fc_out(attended_layers)
 
