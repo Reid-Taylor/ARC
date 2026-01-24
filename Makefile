@@ -1,53 +1,35 @@
-GITHUB_USERNAME ?= Reid-Taylor
-REGISTRY ?= ghcr.io/$(GITHUB_USERNAME)
-PROJECT ?= arc-training
-DOMAIN ?= development
-TAG ?= latest
-GCP_ZONE ?= us-central1-c
+GCP_ZONE ?= us-east4-a
+VM_INSTANCE_NAME ?= arc-training-v2
+MACHINE_TYPE ?= e2-highmem-4
+DISK_SIZE ?= 100GB
 
 # Training parameters
-EPOCHS ?= 250
-BATCH_SIZE ?= 1024
-LEARNING_RATE ?= 5e-3
-ALPHA ?= 0.80
 DATASET_PATH ?= training
 MODEL ?= encoder
 
 gcp-create:
 	@echo "Creating GCP instance..."
-	gcloud compute instances create arc-training-vm \
+	gcloud compute instances create $(VM_INSTANCE_NAME) \
 		--project amplified-hull-484821-b5 \
 		--zone=$(GCP_ZONE) \
-		--machine-type n1-standard-4 \
-		--boot-disk-size 100GB \
+		--machine-type $(MACHINE_TYPE) \
+		--boot-disk-size $(DISK_SIZE) \
 		--maintenance-policy TERMINATE \
 		--restart-on-failure \
 
 gcp-start:
-	gcloud compute instances start arc-training-vm --zone=$(GCP_ZONE)
+	gcloud compute instances start $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
 
 gcp-stop:
-	gcloud compute instances stop arc-training-vm --zone=$(GCP_ZONE)
+	gcloud compute instances stop $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
 
 gcp-ssh:
-	gcloud compute ssh arc-training-vm --zone=$(GCP_ZONE)
-
-gcp-deploy:
-	@echo "Deploying code to GCP instance..."
-	gcloud compute scp --recurse . arc-training-vm:~/ARC --zone=$(GCP_ZONE)
-	gcloud compute ssh arc-training-vm --zone=$(GCP_ZONE) --command="cd ARC && ./scripts/setup_gcp_instance.sh"
-
-gcp-train:
-	gcloud compute ssh arc-training-vm --zone=$(GCP_ZONE) --command="cd ARC && source .venv/bin/activate && python scripts/train_encoder.py --epochs 100 --batch-size 64"
+	gcloud compute ssh $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
 
 train-encoder:
 	@echo "Running full pipeline of ARC Encoder training..."
 	python scripts/train_encoder.py \
 		--config train_config \
-		--epochs $(EPOCHS) \
-		--batch-size $(BATCH_SIZE) \
-		--learning-rate $(LEARNING_RATE) \
-		--alpha $(ALPHA) \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test \
 		--log-path ./logs/test
@@ -56,10 +38,6 @@ local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	python scripts/train_encoder.py \
 		--config test_config \
-		--epochs 2 \
-		--batch-size $(BATCH_SIZE) \
-		--learning-rate $(LEARNING_RATE) \
-		--alpha $(ALPHA) \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test \
 		--log-path ./logs/test
@@ -67,15 +45,11 @@ local-test-encoder:
 local-test-transformer:
 	@echo "Running local test of ARC Encoder training..."
 	python scripts/train_transformer.py \
-		--epochs 2 \
-		--batch-size 4 \
-		--learning-rate $(LEARNING_RATE) \
-		--alpha $(ALPHA) \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test \
 		--log-path ./logs/test
 
-local-view-training:
+view-training:
 	tensorboard --logdir logs/test/arc_$(MODEL)
 
 clean:
@@ -87,20 +61,23 @@ clean:
 
 help:
 	@echo "Available targets:"
-	@echo "  test-local  - Test training script locally (quick test)"
+	@echo "  view-training       - View training logs via TensorBoard"
+	@echo "  train-encoder       - Train the encoder"
+	@echo "  local-test-transformer       - Test the train-transformer pipeline locally"
+	@echo "  local-test-encoder       - Test the train-encoder pipeline locally"
+	@echo "  gcp-create       - Create a new GCP instance, per specifications"
+	@echo "  gcp-start       - Spin up an existing GCP instance"
+	@echo "  gcp-ssh       - SSH into an active GCP instance"
+	@echo "  gcp-stop       - Spin down an active GCP instance"
 	@echo "  clean       - Clean up local artifacts"
 	@echo ""
 	@echo "Configuration variables (can be overridden):"
-	@echo "  REGISTRY=$(REGISTRY)"
-	@echo "  PROJECT=$(PROJECT)"
-	@echo "  DOMAIN=$(DOMAIN)"
-	@echo "  TAG=$(TAG)"
-	@echo "  EPOCHS=$(EPOCHS)"
-	@echo "  BATCH_SIZE=$(BATCH_SIZE)"
-	@echo "  LEARNING_RATE=$(LEARNING_RATE)"
-	@echo "  ALPHA=$(ALPHA)"
+	@echo "  GCP_ZONE=$(GCP_ZONE)"
+	@echo "  VM_INSTANCE_NAME=$(VM_INSTANCE_NAME)"
+	@echo "  MACHINE_TYPE=$(MACHINE_TYPE)"
+	@echo "  DISK_SIZE=$(DISK_SIZE)"
+	@echo "  DATASET_PATH=$(DATASET_PATH)"
+	@echo "  MODEL=$(MODEL)"
 	@echo ""
-	@echo "Example usage:"
-	@echo "  make deploy REGISTRY=myregistry.com EPOCHS=20 BATCH_SIZE=64"
 
-.PHONY: test-local local-view-training clean help
+.PHONY: view-training train-encoder local-test-transformer local-test-encoder gcp-create gcp-start gcp-ssh gcp-stop clea n

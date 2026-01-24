@@ -35,8 +35,10 @@ from src.arc.ARCDataClasses import ARCProblemSet
 from src.arc.ARCEncoder import MultiTaskEncoder
 
 
-def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str):
+def create_dataloader(config: Dict[str, Any]):
     encoder_config = config['model']['encoder']
+    dataset_path:str = config['training']['shared']['dataset_path']
+    batch_size:int = config['training']['encoder']['batch_size']
     
     all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_grids']
     num_samples = len(all_grids)
@@ -121,12 +123,14 @@ def create_dataloader(config: Dict[str, Any], batch_size: int, dataset_path: str
     return train_dataloader, val_dataloader
 
 
-def create_model(config: Dict[str, Any], learning_rate: float, alpha: float) -> MultiTaskEncoder:
+def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
     """Create and initialize the model."""
     encoder_config = config['model']['encoder']
     downstream_attributes_config = config['model']['encoder']['downstream_attributes']
     contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
+    learning_rate: float = config['model'['encoder']['learning_rate']]
+    alpha: float = config['model']['encoder']['alpha']
     
     model = MultiTaskEncoder(
         attribute_requirements=list(downstream_attributes_config.keys()),
@@ -237,10 +241,6 @@ def main():
     """Main training function."""
     parser = argparse.ArgumentParser(description="Train ARC Encoder model")
     parser.add_argument("--config", type=str, help="Name of config file")
-    parser.add_argument("--epochs", type=int, default=10, help="Number of training epochs")
-    parser.add_argument("--batch-size", type=int, default=32, help="Batch size for training")
-    parser.add_argument("--learning-rate", type=float, default=1e-3, help="Learning rate")
-    parser.add_argument("--alpha", type=float, default=0.85, help="Alpha parameter for multi-task learning")
     parser.add_argument("--dataset-path", type=str, default="training", help="Dataset path")
     parser.add_argument("--model-save-path", type=str, default="./models/encoder", help="Model save path")
     parser.add_argument("--log-path", type=str, default="./lightning_logs", help="Logging path")
@@ -256,28 +256,24 @@ def main():
         config = load_config()
     
     print(f"Starting ARC Encoder training with the following parameters:")
-    print(f"  Epochs: {args.epochs}")
-    print(f"  Batch size: {args.batch_size}")
-    print(f"  Learning rate: {args.learning_rate}")
-    print(f"  Alpha: {args.alpha}")
     print(f"  Dataset path: {args.dataset_path}")
     print(f"  Model save path: {args.model_save_path}")
     print(f"  Using GPU: {not args.no_gpu and torch.cuda.is_available()}")
     
     # Create dataloader
     print("Loading dataset...")
-    train_dataloader, val_dataloaders = create_dataloader(config, args.batch_size, args.dataset_path)
+    train_dataloader, val_dataloaders = create_dataloader(config)
     print(f"Dataset loaded with {len(train_dataloader)} batches")
     
     # Create model
     print("Initializing model...")
-    model = create_model(config, args.learning_rate, args.alpha)
+    model = create_model(config)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     # Setup trainer
     print("Setting up trainer...")
     trainer = setup_trainer(
-        args.epochs, 
+        config['training']['encoder']['epochs'],
         args.model_save_path, 
         args.log_path, 
         use_gpu=not args.no_gpu
