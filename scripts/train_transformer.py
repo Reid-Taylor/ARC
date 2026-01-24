@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
 Standalone training script for ARC Encoder that can be executed independently
-or called from Flyte workflows.
 """
 import argparse
 import sys
