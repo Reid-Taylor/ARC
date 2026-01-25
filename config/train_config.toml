@@ -12,7 +12,6 @@ tau = 0.85
 learning_rate = 0.001
 alpha = 0.9
 [model.encoder.downstream_attributes]
-area = {hidden_size = 128, output_size = 1}
 grid_size = {hidden_size = 128, output_size = 2}
 num_colors = {hidden_size = 128, output_size = 1}
 color_map = {hidden_size = 128, output_size = 10}
