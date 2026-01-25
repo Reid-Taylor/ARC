@@ -60,7 +60,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.target_projector.module.load_state_dict(self.online_projector.module.state_dict())
         
         self.online_predictor = TensorDictModule(
-            AttributeHead(
+            FullyConnectedLayer(
                 "Online Predictor",
                 **network_dimensions["Contrastive Predictor"]
             ),
@@ -97,11 +97,10 @@ class MultiTaskEncoder(L.LightningModule):
                 raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
         for key in attribute_requirements:
-            setattr(self, f"attribute_head_{key}", TensorDictModule(
+            setattr(self, f"attribute_predictor_{key}", TensorDictModule(
                 AttributeHead(
-                    "Attribute Head",
-                    **network_dimensions["Attribute Head"].get(key)
-                    #TODO: refactor all hidden sizes of attributeHead to be tuples for better flexibility
+                    "Attribute Predictor",
+                    **network_dimensions["Attribute Predictor"].get(key)
                 ),
                 in_keys=["online_embedding"],
                 out_keys=[f"predicted_{key}"]
@@ -128,8 +127,8 @@ class MultiTaskEncoder(L.LightningModule):
             "target_encoder": [p for p in self.target_encoder.module.parameters() if p.requires_grad],
             "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
             "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
-            "attribute_heads": {
-                key: [p for p in getattr(self, f"attribute_head_{key}").module.parameters() if p.requires_grad]
+            "attribute_predictors": {
+                key: [p for p in getattr(self, f"attribute_predictor_{key}").module.parameters() if p.requires_grad]
                 for key in self.downstream_attributes
             },
             "attribute_detectors": {
@@ -154,7 +153,7 @@ class MultiTaskEncoder(L.LightningModule):
         # Predict attributes from embedding
         y_hat = {}
         for key in self.downstream_attributes:
-            y_hat[key] = getattr(self, f"attribute_head_{key}")(z)
+            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
 
         # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
         c = self.online_projector(z)
@@ -190,7 +189,7 @@ class MultiTaskEncoder(L.LightningModule):
         # Predict attributes from embedding
         y_hat = {}
         for key in self.downstream_attributes:
-            y_hat[key] = getattr(self, f"attribute_head_{key}")(z)
+            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
 
         # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
         c = self.online_projector(z)
@@ -319,7 +318,7 @@ class MultiTaskEncoder(L.LightningModule):
         for attribute in self.downstream_attributes:
             G.append(_get_gradient(
                 w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
-                all_params.get("online_encoder") + all_params.get("attribute_heads").get(attribute)
+                all_params.get("online_encoder") + all_params.get("attribute_predictors").get(attribute)
             ))
         
         # Attribute detection tasks gradient norms
@@ -368,9 +367,11 @@ class MultiTaskEncoder(L.LightningModule):
                 "train/total_loss": loss_total.detach(),
                 "train/loss_grad": loss_grad.detach(),
                 "train/reconstruction_loss": reconstruction_loss.detach(),
-                "train/attribute_prediction_loss": torch.stack(downstream_attribute_loss).detach().mean(),
                 "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean(),
                 "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean(),
+            } | 
+            {
+                f"train/attribute_prediction_{key}_loss": downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1] for key in self.downstream_attributes
             },
             prog_bar=True
         )
@@ -455,7 +456,7 @@ class MultiTaskEncoder(L.LightningModule):
                 params.get("decoder") + 
                 params.get("online_projector") + 
                 params.get("online_predictor") + 
-                [parameter for each in params.get("attribute_heads").values() for parameter in each] + 
+                [parameter for each in params.get("attribute_predictors").values() for parameter in each] + 
                 [parameter for each in params.get("attribute_detectors").values() for parameter in each]
             )
             ,

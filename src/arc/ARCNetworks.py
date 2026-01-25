@@ -13,7 +13,7 @@ class FullyConnectedLayer(torch.nn.Module):
         super().__init__()
         self.name:str = name
         self.fc1 = torch.nn.Linear(input_size, output_size)
-        if activation.lower() not in ['relu', 'softmax','sigmoid']:
+        if activation.lower() not in ['relu', 'softmax','sigmoid',"identity"]:
             print(f"Warning: Unsupported activation function '{activation}'. Defaulting to identity function.")
         if activation == 'relu':
             self.activation = F.relu
@@ -21,6 +21,8 @@ class FullyConnectedLayer(torch.nn.Module):
             self.activation = F.softmax
         elif activation == 'sigmoid':
             self.activation = F.sigmoid
+        elif activation == "identity":
+            self.activation = lambda x: x
         else:
             self.activation = lambda x: x
 
@@ -76,19 +78,23 @@ class SelfAttentionHead(torch.nn.Module):
 @beartype
 class AttributeHead(torch.nn.Module):
     """
-    An attribute head which predicts specific attributes from the latent representation.
+    A network which predicts specific attributes from the latent representation.
     """
     def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10):
         super().__init__()
-        self.name:str = name
-        self.fc1 = torch.nn.Linear(input_size, hidden_size*2)
-        self.attention = AttentionHead(hidden_size*2, hidden_size, hidden_size)
-        self.fc2 = torch.nn.Linear(hidden_size, output_size)
+        self.name = name
+        self.layer1 = FullyConnectedLayer(
+            input_size=input_size,
+            output_size=hidden_size
+        )
+        self.layer2 = FullyConnectedLayer(
+            input_size=hidden_size,
+            output_size=output_size
+        )
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
-        x = F.relu(self.fc1(x))
-        x = self.attention(x)
-        x = self.fc2(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
         return x
 
 @beartype

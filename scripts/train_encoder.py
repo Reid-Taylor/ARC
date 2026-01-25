@@ -158,7 +158,8 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             },
             "Contrastive Predictor": {
                 "input_size": shared_model_config['latent_size'],
-                "output_size": shared_model_config['latent_size']
+                "output_size": shared_model_config['latent_size'],
+                "activation": "identity"
             },
             "Attribute Detector": {
                 key: {
@@ -168,7 +169,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                 } for key in contrastive_attributes_config.keys() 
                 if contrastive_attributes_config[key].get('task_type', None) == 'task_sensitive'
             },
-            "Attribute Head": {
+            "Attribute Predictor": {
                 key: {
                     "input_size": shared_model_config['latent_size'],
                     "hidden_size": downstream_attributes_config[key]['hidden_size'],
@@ -229,7 +230,7 @@ def setup_trainer(
         devices=devices,
         log_every_n_steps=1,
         # val_check_interval=0.25,
-        check_val_every_n_epoch=2,
+        check_val_every_n_epoch=10,
         enable_progress_bar=True,
         enable_model_summary=True
     )
