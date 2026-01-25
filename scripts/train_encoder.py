@@ -106,7 +106,7 @@ def create_dataloader(config: Dict[str, Any]):
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
-        num_workers=2 if torch.cuda.is_available() else 2,
+        num_workers=2 if torch.cuda.is_available() else 0,
         pin_memory=(get_device().type=="cuda")
     )
     # Create dataloader
