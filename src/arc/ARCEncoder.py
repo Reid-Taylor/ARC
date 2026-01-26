@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
+from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer, ColorMapPredictor
 
 # NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
 # NetworkParameters = Dict[str, Union[List[torch.nn.Parameter], Dict[str, List[torch.nn.Parameter]]]]
@@ -37,14 +37,24 @@ class MultiTaskEncoder(L.LightningModule):
         self.downstream_attributes: list[str] = attribute_requirements
 
         for key in attribute_requirements:
-            setattr(self, f"attribute_predictor_{key}", TensorDictModule(
-                AttributeHead(
-                    "Attribute Predictor",
-                    **network_dimensions["Attribute Predictor"].get(key)
-                ),
-                in_keys=["online_embedding"],
-                out_keys=[f"predicted_{key}"]
-            ))
+            if key=="color_map":
+                setattr(self, f"attribute_predictor_{key}", TensorDictModule(
+                    ColorMapPredictor(
+                        "Attribute Predictor",
+                        **network_dimensions["Attribute Predictor"].get(key)
+                    ),
+                    in_keys=["online_embedding"],
+                    out_keys=[f"predicted_{key}"]
+                ))
+            else:
+                setattr(self, f"attribute_predictor_{key}", TensorDictModule(
+                    AttributeHead(
+                        "Attribute Predictor",
+                        **network_dimensions["Attribute Predictor"].get(key)
+                    ),
+                    in_keys=["online_embedding"],
+                    out_keys=[f"predicted_{key}"]
+                ))
 
         self.num_tasks: int = 1
         
@@ -87,21 +97,8 @@ class MultiTaskEncoder(L.LightningModule):
             "predicted_downstream_attributes": y_hat
         }
 
-        z = self.online_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
-
-        # Predict attributes from embedding
-        y_hat = {}
-        for key in self.downstream_attributes:
-            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
-
-        mirrored_forward = {
-            "online_embedding": z,
-            "predicted_downstream_attributes": y_hat
-        }
-
         results = {
             "standard":standard_forward,
-            "mirrored":mirrored_forward,
         }
 
         return results

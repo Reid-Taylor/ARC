@@ -98,6 +98,36 @@ class AttributeHead(torch.nn.Module):
         return x
 
 @beartype
+class ColorMapPredictor(torch.nn.Module):
+    """
+    A network which predicts specific attributes from the latent representation.
+    """
+    def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10):
+        super().__init__()
+        self.name = name
+        self.layer1 = FullyConnectedLayer(
+            input_size=input_size,
+            output_size=hidden_size,
+        )
+        self.layer2 = FullyConnectedLayer(
+            input_size=hidden_size,
+            output_size=hidden_size,
+            activation="sigmoid",
+        )
+        self.layer3 = FullyConnectedLayer(
+            input_size=hidden_size,
+            output_size=output_size
+        )
+
+    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        return x
+
+
+
+@beartype
 class Encoder(torch.nn.Module):
     """
     An encoder module which uses attention heads to encode input grids into a latent representation.
