@@ -35,7 +35,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.task_invariants: list[str] = []
         self.task_sensitives: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
-        
+
         for key in attribute_requirements:
             setattr(self, f"attribute_predictor_{key}", TensorDictModule(
                 AttributeHead(
@@ -114,14 +114,10 @@ class MultiTaskEncoder(L.LightningModule):
 
         for key in ['color_map']:
             loss = \
-                (F.mse_loss(
+                F.mse_loss(
                     results["standard"]["predicted_downstream_attributes"][key],
                     batch[key]
-                ) + 
-                F.mse_loss(
-                    results["mirrored"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                )) * 0.5
+                )
 
         # Initialize L0 if not already done
         if (not self.L0_initialized):
