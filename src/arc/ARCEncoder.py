@@ -300,7 +300,7 @@ class MultiTaskEncoder(L.LightningModule):
         G = []
         loss_total = torch.sum((w * loss))
 
-        def _get_gradient(relevant_weighted_losses, params) -> List[torch.Tensor]:
+        def _get_gradient(relevant_weighted_losses, params) -> torch.Tensor:
             gradients = torch.autograd.grad(relevant_weighted_losses, params, retain_graph=True, create_graph=True, allow_unused=True)
             list_of_gradients = [g for g in gradients if g is not None]
 
@@ -371,7 +371,8 @@ class MultiTaskEncoder(L.LightningModule):
                 "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean(),
             } | 
             {
-                f"train/attribute_prediction_{key}_loss": downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1] for key in self.downstream_attributes
+                f"train/attribute_prediction_{key}_loss": downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1] 
+                    for key in self.downstream_attributes
             },
             prog_bar=True
         )
