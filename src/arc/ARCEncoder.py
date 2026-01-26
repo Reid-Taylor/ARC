@@ -31,71 +31,11 @@ class MultiTaskEncoder(L.LightningModule):
             in_keys=["encoded_grid","padded_grid"],
             out_keys=["online_embedding"]
         )
-        self.online_projector = TensorDictModule(
-            AttributeHead(
-                "Contrastive Projection (Online)",
-                **network_dimensions["Contrastive Projection"]
-            ),
-            in_keys=["online_embedding"],
-            out_keys=["online_representation"]
-        )
-
-        self.target_encoder = TensorDictModule(
-            Encoder(
-                **network_dimensions["Encoder"]
-            ),
-            in_keys=["encoded_grid", "padded_grid"],
-            out_keys=["target_embedding"]
-        )
-        self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
-        
-        self.target_projector = TensorDictModule(
-            AttributeHead(
-                "Contrastive Projection (Target)",
-                **network_dimensions["Contrastive Projection"]
-            ),
-            in_keys=["target_embedding"],
-            out_keys=["target_representation"]
-        )
-        self.target_projector.module.load_state_dict(self.online_projector.module.state_dict())
-        
-        self.online_predictor = TensorDictModule(
-            FullyConnectedLayer(
-                "Online Predictor",
-                **network_dimensions["Contrastive Predictor"]
-            ),
-            in_keys=["online_representation"],
-            out_keys=["predicted_target_representation"]
-        )
-
-        self.decoder = TensorDictModule(
-            Decoder(
-                **network_dimensions["Decoder"]
-            ),
-            in_keys=["online_embedding"],
-            out_keys=["predicted_grid"]
-        )
-
+                
         self.task_invariants: list[str] = []
         self.task_sensitives: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
-
-        for key, value in task_type.items():
-            if value == "task_invariant":
-                self.task_invariants.append(key)
-            elif value == "task_sensitive":
-                self.task_sensitives.append(key)
-                setattr(self, f"attribute_detector_{key}", TensorDictModule(
-                    FullyConnectedLayer(
-                        name=f"attribute_{key}",
-                        **network_dimensions["Attribute Detector"].get(key)
-                    ),
-                    in_keys=["online_representation"],
-                    out_keys=[f"predicted_presence_{key}"]
-                ))
-            else: 
-                raise ValueError(f"Unknown task type '{value}' for task '{key}'")
-
+        
         for key in attribute_requirements:
             setattr(self, f"attribute_predictor_{key}", TensorDictModule(
                 AttributeHead(
@@ -121,18 +61,9 @@ class MultiTaskEncoder(L.LightningModule):
     def _get_parameters(self):
         params = {
             "online_encoder": [p for p in self.online_encoder.module.parameters() if p.requires_grad],
-            "online_projector": [p for p in self.online_projector.module.parameters() if p.requires_grad],
-            "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
-            "target_encoder": [p for p in self.target_encoder.module.parameters() if p.requires_grad],
-            "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
-            "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
             "attribute_predictors": {
                 key: [p for p in getattr(self, f"attribute_predictor_{key}").module.parameters() if p.requires_grad]
                 for key in self.downstream_attributes
-            },
-            "attribute_detectors": {
-                key: [p for p in getattr(self, f"attribute_detector_{key}").module.parameters() if p.requires_grad]
-                for key in self.task_sensitives
             }
         }
         return params
@@ -146,61 +77,25 @@ class MultiTaskEncoder(L.LightningModule):
         # Encode input grid into latent embedding space
         z = self.online_encoder(x['encoded_grid'], x['padded_grid'])
 
-        # Reconstruct input grid from embedding
-        x_hat = self.decoder(z)
-
         # Predict attributes from embedding
         y_hat = {}
         for key in self.downstream_attributes:
             y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
 
-        # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
-        c = self.online_projector(z)
-        # Prediction of c_tilde given c
-        c_tilde_hat = self.online_predictor(c)
-
-        # Encode augmented input into the latent embedding space, using target encoder
-        z_tilde = self.target_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
-        # We project the latent embedding into the contrastive learning latent space
-        c_tilde = self.target_projector(z_tilde)
-        
         standard_forward = {
             "online_embedding": z,
-            "target_embedding": z_tilde,
-            "online_representation": c,
-            "target_representation": c_tilde,
-            "predicted_target_representation": c_tilde_hat,
-            "predicted_grid": x_hat,
             "predicted_downstream_attributes": y_hat
         }
 
         z = self.online_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
 
-        # Reconstruct input grid from embedding
-        x_hat = self.decoder(z)
-
         # Predict attributes from embedding
         y_hat = {}
         for key in self.downstream_attributes:
             y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
 
-        # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
-        c = self.online_projector(z)
-        # Prediction of c_tilde given c
-        c_tilde_hat = self.online_predictor(c)
-
-        # Encode augmented input into the latent embedding space, using target encoder
-        z_tilde = self.target_encoder(x['encoded_grid'], x['padded_grid'])
-        # We project the latent embedding into the contrastive learning latent space
-        c_tilde = self.target_projector(z_tilde)
-
         mirrored_forward = {
             "online_embedding": z,
-            "target_embedding": z_tilde,
-            "online_representation": c,
-            "target_representation": c_tilde,
-            "predicted_target_representation": c_tilde_hat,
-            "predicted_grid": x_hat,
             "predicted_downstream_attributes": y_hat
         }
 
@@ -276,12 +171,6 @@ class MultiTaskEncoder(L.LightningModule):
         opt_model.step()
         opt_w.step()
 
-        # Manually update target network with exponential moving average of online network. 
-        for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
-            param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
-        for param_o, param_t in zip(all_params.get("online_projector"), all_params.get("target_projector")):
-            param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
-
         # Log metrics and updates
         self.log_dict(
             {
@@ -298,11 +187,7 @@ class MultiTaskEncoder(L.LightningModule):
         opt_model = torch.optim.Adam(
             params = (
                 params.get("online_encoder") + 
-                params.get("decoder") + 
-                params.get("online_projector") + 
-                params.get("online_predictor") + 
-                [parameter for each in params.get("attribute_predictors").values() for parameter in each] + 
-                [parameter for each in params.get("attribute_detectors").values() for parameter in each]
+                [parameter for each in params.get("attribute_predictors").values() for parameter in each]
             )
             ,
             lr=self.lr
