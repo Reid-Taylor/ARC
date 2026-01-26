@@ -106,8 +106,7 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_invariants)
-        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + task invariant attribute tasks
+        self.num_tasks: int = 1
         
         self.lr: float = learning_rate
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
@@ -164,12 +163,7 @@ class MultiTaskEncoder(L.LightningModule):
         z_tilde = self.target_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
         # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
-
-        # Predict task-sensitive attributes from our contrastive representation. We want to discriminate these well, to enforce structure upon our latent space.
-        attribute_detections = {}
-        for key in self.task_sensitives:
-            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
-
+        
         standard_forward = {
             "online_embedding": z,
             "target_embedding": z_tilde,
@@ -177,8 +171,7 @@ class MultiTaskEncoder(L.LightningModule):
             "target_representation": c_tilde,
             "predicted_target_representation": c_tilde_hat,
             "predicted_grid": x_hat,
-            "predicted_downstream_attributes": y_hat,
-            "predicted_task_sensitive_attributes": attribute_detections
+            "predicted_downstream_attributes": y_hat
         }
 
         z = self.online_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
@@ -201,11 +194,6 @@ class MultiTaskEncoder(L.LightningModule):
         # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 
-        # Predict task-sensitive attributes from our contrastive representation. We want to discriminate these well, to enforce structure upon our latent space.
-        attribute_detections = {}
-        for key in self.task_sensitives:
-            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
-
         mirrored_forward = {
             "online_embedding": z,
             "target_embedding": z_tilde,
@@ -213,8 +201,7 @@ class MultiTaskEncoder(L.LightningModule):
             "target_representation": c_tilde,
             "predicted_target_representation": c_tilde_hat,
             "predicted_grid": x_hat,
-            "predicted_downstream_attributes": y_hat,
-            "predicted_task_sensitive_attributes": attribute_detections
+            "predicted_downstream_attributes": y_hat
         }
 
         results = {
@@ -230,21 +217,8 @@ class MultiTaskEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
         all_params = self._get_parameters()
 
-        # Reconstruction Task Loss
-        reconstruction_loss = 0.5 * \
-            (F.mse_loss(results['standard']["predicted_grid"], batch["encoded_grid"]) 
-                + 
-            F.mse_loss(results['mirrored']["predicted_grid"], batch["encoded_grid"]))
-
-        key_to_idx = {
-            'reconstruction_loss':0
-        }
-
-        # Downstream Attribute Recovery Task Loss
-        downstream_attribute_loss = []
-        for key in self.downstream_attributes:
-            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
-            downstream_attribute_loss.append(
+        for key in ['color_map']:
+            loss = \
                 (F.mse_loss(
                     results["standard"]["predicted_downstream_attributes"][key],
                     batch[key]
@@ -253,39 +227,6 @@ class MultiTaskEncoder(L.LightningModule):
                     results["mirrored"]["predicted_downstream_attributes"][key],
                     batch[key]
                 )) * 0.5
-            ) 
-
-        # Task Sensitive Attribute Detection Loss
-        task_sensitive_loss = []
-        for key in self.task_sensitives:
-            key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
-            task_sensitive_loss.append(
-                (F.binary_cross_entropy(
-                    results['standard']["predicted_task_sensitive_attributes"][key], 
-                    batch[f"presence_{key}"]
-                ) + 
-                F.binary_cross_entropy(
-                    results['mirrored']["predicted_task_sensitive_attributes"][key], 
-                    batch[f"presence_{key}"]
-                )) * 0.5
-            )
-        
-        # Task Invariant Loss
-        task_invariant_loss = []
-        for key in self.task_invariants:
-            key_to_idx[f'invariant_{key}'] = len(key_to_idx)
-            task_invariant_loss.append(
-                (F.mse_loss(
-                    results['standard']["online_representation"], 
-                    results['standard']["target_representation"].detach()
-                ) + 
-                F.mse_loss(
-                    results['mirrored']["online_representation"], 
-                    results['mirrored']["target_representation"].detach()
-                ))*0.5
-            )
-
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
 
         # Initialize L0 if not already done
         if (not self.L0_initialized):
@@ -308,33 +249,13 @@ class MultiTaskEncoder(L.LightningModule):
                 return torch.norm(torch.stack([g.norm() for g in list_of_gradients]), 2)
             return torch.tensor(0.0, device=loss.device, requires_grad=True)
 
-        # Reconstruction task gradient norm
-        G.append(
-            _get_gradient(w[0] * loss[0], 
-            all_params.get("online_encoder") + all_params.get("decoder"))
-        )
-        
         # Attribute prediction tasks gradient norms
         for attribute in self.downstream_attributes:
             G.append(_get_gradient(
-                w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
+                w[0] * loss, 
                 all_params.get("online_encoder") + all_params.get("attribute_predictors").get(attribute)
             ))
-        
-        # Attribute detection tasks gradient norms
-        for key in self.task_sensitives:
-            G.append(_get_gradient(
-                w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")],  
-                all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
-            ))
-        
-        # Attribute invariant tasks gradient norms
-        for key in self.task_invariants:
-            G.append(_get_gradient(
-                w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
-                all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
-            ))
-        
+                
         # Compute mean gradient norm
         G = torch.stack(G)
         mean_G = G.mean()
@@ -366,84 +287,7 @@ class MultiTaskEncoder(L.LightningModule):
             {
                 "train/total_loss": loss_total.detach(),
                 "train/loss_grad": loss_grad.detach(),
-                "train/reconstruction_loss": reconstruction_loss.detach(),
-                "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean(),
-                "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean(),
-            } | 
-            {
-                f"train/attribute_prediction_{key}_loss": downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1] 
-                    for key in self.downstream_attributes
-            },
-            prog_bar=True
-        )
-
-    def validation_step(self, batch, batch_idx):
-
-        results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
-
-        # Reconstruction Task Loss
-        reconstruction_loss = 0.5 * \
-            (F.mse_loss(results['standard']["predicted_grid"], batch["encoded_grid"]) 
-                + 
-            F.mse_loss(results['mirrored']["predicted_grid"], batch["encoded_grid"]))
-
-        key_to_idx = {
-            'reconstruction_loss':0
-        }
-
-        # Downstream Attribute Recovery Task Loss
-        downstream_attribute_loss = []
-        for key in self.downstream_attributes:
-            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
-            downstream_attribute_loss.append(
-                (F.mse_loss(
-                    results["standard"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                ) + 
-                F.mse_loss(
-                    results["mirrored"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                )) * 0.5
-            ) 
-
-        # Task Sensitive Attribute Detection Loss
-        task_sensitive_loss = []
-        for key in self.task_sensitives:
-            key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
-            task_sensitive_loss.append(
-                (F.binary_cross_entropy(
-                    results['standard']["predicted_task_sensitive_attributes"][key], 
-                    batch[f"presence_{key}"]
-                ) + 
-                F.binary_cross_entropy(
-                    results['mirrored']["predicted_task_sensitive_attributes"][key], 
-                    batch[f"presence_{key}"]
-                )) * 0.5
-            )
-        
-        # Task Invariant Loss
-        task_invariant_loss = []
-        for key in self.task_invariants:
-            key_to_idx[f'invariant_{key}'] = len(key_to_idx)
-            task_invariant_loss.append(
-                (F.mse_loss(
-                    results['standard']["online_representation"], 
-                    results['standard']["target_representation"].detach()
-                ) + 
-                F.mse_loss(
-                    results['mirrored']["online_representation"], 
-                    results['mirrored']["target_representation"].detach()
-                ))*0.5
-            )
-
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
-
-        w = self._task_weights()
-        loss_total = torch.sum((w * loss))
-
-        self.log_dict(
-            {
-                "val_loss": loss_total.detach(),
+                "train/attribute_prediction_color_map_loss": loss.detach()
             },
             prog_bar=True
         )
