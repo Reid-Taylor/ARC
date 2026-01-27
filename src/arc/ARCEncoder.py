@@ -102,7 +102,7 @@ class MultiTaskEncoder(L.LightningModule):
                     FullyConnectedLayer(
                         name="Attribute Predictor",
                         bias=False,
-                        activation='identity'
+                        activation='identity',
                         **network_dimensions["Attribute Predictor"].get(key)
                     ),
                     in_keys=["online_embedding"],
