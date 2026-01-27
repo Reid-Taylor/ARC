@@ -56,7 +56,7 @@ local-test-transformer:
 		--log-path ./logs/test
 
 view-training:
-	tensorboard --logdir logs/test/arc_$(MODEL)
+	tensorboard --logdir logs/test
 
 clean:
 	@echo "Cleaning up local artifacts..."

@@ -9,10 +9,10 @@ class FullyConnectedLayer(torch.nn.Module):
     """
     A fully connected layer which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str=None, input_size:int=64, output_size:int=10, activation:str='relu'):
+    def __init__(self, name:str=None, input_size:int=64, output_size:int=10, bias:bool=True,activation:str='relu'):
         super().__init__()
         self.name:str = name
-        self.fc1 = torch.nn.Linear(input_size, output_size)
+        self.fc1 = torch.nn.Linear(input_size, output_size, bias=bias)
         if activation.lower() not in ['relu', 'softmax','sigmoid',"identity"]:
             print(f"Warning: Unsupported activation function '{activation}'. Defaulting to identity function.")
         if activation == 'relu':
@@ -98,6 +98,14 @@ class AttributeHead(torch.nn.Module):
         return x
 
 @beartype
+class ColorMap(torch.nn.Module):
+    def __init__(self):
+        pass
+
+    def forward(self, x:torch.Tensor) -> torch.Tensor:
+        pass
+
+@beartype
 class Encoder(torch.nn.Module):
     """
     An encoder module which uses attention heads to encode input grids into a latent representation.
@@ -107,34 +115,37 @@ class Encoder(torch.nn.Module):
 
         attention_input, attention_head, attention_output = attention_sizes
 
-        self.channel_projectors = [FullyConnectedLayer(input_size=input_size, output_size=attention_input) for _ in range(10)]
-        self.global_projector = FullyConnectedLayer(input_size=input_size, output_size=attention_input)
+        self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(10)]
 
-        self.heads = [SelfAttentionHead(attention_input, attention_head, attention_output) for _ in range(10)]
-
-        self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size)
+        self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size-10)
 
     def forward(self, encoded_grid, padded_grid) -> Float[torch.Tensor, "B D"]:
 
         the_attended = []
-
-        encoded_grid_projection = self.global_projector(encoded_grid)
+        masks = []
 
         for i in range(10):
+            masked_input = torch.where(
+                        torch.eq(padded_grid, i+1),
+                        1.0,
+                        0.0
+                    ).to(torch.float32)
+            
+            masks.append(masked_input.sum(dim=-1))
+
             the_attended.append(
                 self.heads[i](
-                    global_view=encoded_grid_projection,
-                    local_view=self.channel_projectors[i](torch.where(
-                        torch.eq(padded_grid, i+1),
-                        1/(i+1),
-                        0
-                    ).to(torch.float32))
+                    global_view=encoded_grid,
+                    local_view=masked_input
                 )
             )
         
         attended_layers = torch.cat(the_attended, dim=-1)
 
-        return self.fc_out(attended_layers)
+        final_layer = self.fc_out(attended_layers)
+
+        masks_tensor = torch.stack(masks)        
+        return torch.cat([final_layer, masks_tensor], dim=-1)
 
 @beartype
 class Decoder(torch.nn.Module):
