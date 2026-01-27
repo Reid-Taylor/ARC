@@ -124,11 +124,11 @@ class Encoder(torch.nn.Module):
             the_attended.append(
                 self.heads[i](
                     global_view=encoded_grid_projection,
-                    local_view=torch.where(
-                        torch.eq(self.channel_projectors[i](padded_grid), i+1),
-                        i+1,
+                    local_view=self.channel_projectors[i](torch.where(
+                        torch.eq(padded_grid, i+1),
+                        1/(i+1),
                         0
-                    ).to(torch.float32)
+                    ).to(torch.float32))
                 )
             )
         
