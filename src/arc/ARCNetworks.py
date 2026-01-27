@@ -1,5 +1,6 @@
 from __future__ import annotations
 from beartype import beartype
+from typing import List
 from jaxtyping import Float
 import torch
 from torch.nn import functional as F
@@ -105,6 +106,9 @@ class ColorMapPredictor(torch.nn.Module):
     def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10):
         super().__init__()
         self.name = name
+
+        self.list_of_heads = [FullyConnectedLayer(input_size=input_size, output_size=int(hidden_size/10)) for _ in range(10)]
+
         self.layer1 = FullyConnectedLayer(
             input_size=input_size,
             output_size=hidden_size,
@@ -115,15 +119,26 @@ class ColorMapPredictor(torch.nn.Module):
             activation="sigmoid",
         )
         self.layer3 = FullyConnectedLayer(
-            input_size=hidden_size,
+            input_size=hidden_size*2,
             output_size=output_size
         )
 
-    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
+        self.layer = FullyConnectedLayer(
+            input_size=10*int(hidden_size/10),
+            output_size=hidden_size
+        )
+
+    def forward(self, x:torch.Tensor, attended_list:List[torch.Tensor]) -> Float[torch.Tensor, "B _"]:
         x = self.layer1(x)
         x = self.layer2(x)
-        x = self.layer3(x)
-        return x
+
+        head_layers = []
+        for i in range(10):
+            head_layers.append(self.list_of_heads[i](attended_list[i]))
+
+        c = self.layer(torch.cat(head_layers, dim=1))
+
+        return self.layer3(torch.cat([c,x], dim=1))
 
 @beartype
 class Encoder(torch.nn.Module):
@@ -142,7 +157,7 @@ class Encoder(torch.nn.Module):
 
         self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size)
 
-    def forward(self, encoded_grid, padded_grid) -> Float[torch.Tensor, "B D"]:
+    def forward(self, encoded_grid, padded_grid):
 
         the_attended = []
 
@@ -152,17 +167,17 @@ class Encoder(torch.nn.Module):
             the_attended.append(
                 self.heads[i](
                     global_view=encoded_grid_projection,
-                    local_view=torch.where(
-                        torch.eq(self.channel_projectors[i](padded_grid), i+1),
+                    local_view=self.channel_projectors[i](torch.where(
+                        torch.eq(padded_grid, i+1),
                         i+1,
                         0
-                    ).to(torch.float32)
+                    ).to(torch.float32))
                 )
             )
         
         attended_layers = torch.cat(the_attended, dim=-1)
 
-        return self.fc_out(attended_layers)
+        return self.fc_out(attended_layers), the_attended
 
 @beartype
 class Decoder(torch.nn.Module):

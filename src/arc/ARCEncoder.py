@@ -29,7 +29,7 @@ class MultiTaskEncoder(L.LightningModule):
                 **network_dimensions["Encoder"]
             ),
             in_keys=["encoded_grid","padded_grid"],
-            out_keys=["online_embedding"]
+            out_keys=["online_embedding","attended_list"]
         )
                 
         self.task_invariants: list[str] = []
@@ -43,7 +43,7 @@ class MultiTaskEncoder(L.LightningModule):
                         "Attribute Predictor",
                         **network_dimensions["Attribute Predictor"].get(key)
                     ),
-                    in_keys=["online_embedding"],
+                    in_keys=["online_embedding", "attended_list"],
                     out_keys=[f"predicted_{key}"]
                 ))
             else:
@@ -85,12 +85,12 @@ class MultiTaskEncoder(L.LightningModule):
         
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
         # Encode input grid into latent embedding space
-        z = self.online_encoder(x['encoded_grid'], x['padded_grid'])
+        z, attended_list_of_tensors = self.online_encoder(x['encoded_grid'], x['padded_grid'])
 
         # Predict attributes from embedding
         y_hat = {}
-        for key in self.downstream_attributes:
-            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
+        for key in ['color_map']:
+            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z, attended_list_of_tensors)
 
         standard_forward = {
             "online_embedding": z,

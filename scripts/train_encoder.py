@@ -71,6 +71,7 @@ def create_dataloader(config: Dict[str, Any]):
                 "padded_augmented_grid": padded_augmented_grids,
                 "encoded_augmented_grid": encoded_augmented_grids,
                 "predicted_grid": None,
+                "attended_dict":None,
 
                 "area": area,
                 "grid_size": grid_size,

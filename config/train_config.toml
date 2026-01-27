@@ -4,7 +4,7 @@ latent_size = 256
 transformation_dimension_size = 512
 [model.encoder]
 grid_size = 900
-attention_sizes = [512, 1024, 1024]
+attention_sizes = [256, 512, 512]
 learning_rate = 0.01
 alpha = 0.80
 tau = 0.85
