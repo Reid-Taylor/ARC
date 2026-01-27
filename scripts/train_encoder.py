@@ -175,6 +175,14 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                     "hidden_size": downstream_attributes_config[key]['hidden_size'],
                     "output_size": downstream_attributes_config[key]['output_size']
                 } for key in downstream_attributes_config.keys()
+                if key !='color_map'
+            } | {
+                key: {
+                    "input_size": shared_model_config['latent_size'],
+                    "output_size": downstream_attributes_config[key]['output_size']
+                } for key in downstream_attributes_config.keys()
+                if key == 'color_map'
+
             },
         }
     ).to(get_device())
