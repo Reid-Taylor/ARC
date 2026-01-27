@@ -144,7 +144,7 @@ class Encoder(torch.nn.Module):
 
         final_layer = self.fc_out(attended_layers)
 
-        masks_tensor = torch.stack(masks,dim=1)
+        masks_tensor = torch.stack(masks,dim=-1)
         return torch.cat([final_layer, masks_tensor], dim=-1)
 
 @beartype

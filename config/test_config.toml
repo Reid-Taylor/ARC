@@ -1,6 +1,6 @@
 [model]
 [model.shared]
-latent_size = 10
+latent_size = 32
 transformation_dimension_size = 10
 [model.encoder]
 grid_size = 900
