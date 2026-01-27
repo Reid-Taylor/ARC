@@ -107,7 +107,7 @@ class ColorMapPredictor(torch.nn.Module):
         super().__init__()
         self.name = name
 
-        self.list_of_heads = [FullyConnectedLayer(input_size=input_size, output_size=int(hidden_size/10)) for _ in range(10)]
+        self.list_of_heads = [FullyConnectedLayer(input_size=output_size, output_size=int(hidden_size/10)) for _ in range(10)]
 
         self.layer1 = FullyConnectedLayer(
             input_size=input_size,
