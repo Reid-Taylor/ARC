@@ -169,7 +169,7 @@ class Encoder(torch.nn.Module):
                     global_view=encoded_grid_projection,
                     local_view=self.channel_projectors[i](torch.where(
                         torch.eq(padded_grid, i+1),
-                        1/i+1,
+                        1/(i+1),
                         0
                     ).to(torch.float32))
                 )
