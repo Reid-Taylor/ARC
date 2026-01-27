@@ -125,8 +125,6 @@ class ColorMapPredictor(torch.nn.Module):
         x = self.layer3(x)
         return x
 
-
-
 @beartype
 class Encoder(torch.nn.Module):
     """
