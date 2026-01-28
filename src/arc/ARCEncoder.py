@@ -97,26 +97,14 @@ class MultiTaskEncoder(L.LightningModule):
                 raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
         for key in attribute_requirements:
-            if key=="color_map":
-                setattr(self, f"attribute_predictor_{key}", TensorDictModule(
-                    FullyConnectedLayer(
-                        name="Attribute Predictor",
-                        bias=False,
-                        activation='identity',
-                        **network_dimensions["Attribute Predictor"].get(key)
-                    ),
-                    in_keys=["online_embedding"],
-                    out_keys=[f"predicted_{key}"]
-                ))
-            else:
-                setattr(self, f"attribute_predictor_{key}", TensorDictModule(
-                    AttributeHead(
-                        "Attribute Predictor",
-                        **network_dimensions["Attribute Predictor"].get(key)
-                    ),
-                    in_keys=["online_embedding"],
-                    out_keys=[f"predicted_{key}"]
-                ))
+            setattr(self, f"attribute_predictor_{key}", TensorDictModule(
+                AttributeHead(
+                    "Attribute Predictor",
+                    **network_dimensions["Attribute Predictor"].get(key)
+                ),
+                in_keys=["online_embedding"],
+                out_keys=[f"predicted_{key}"]
+            ))
 
         self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_invariants)
         # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + task invariant attribute tasks

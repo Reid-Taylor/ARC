@@ -60,7 +60,6 @@ def create_dataloader(config: Dict[str, Any]):
         area = torch.stack([torch.tensor(item["meta"].area, dtype=torch.float32) for item in batch], dim=0).reshape(-1,1)
         grid_size = torch.stack([torch.tensor(item["meta"].grid_size, dtype=torch.float32) for item in batch], dim=0).reshape(-1,2)
         num_colors = torch.stack([torch.tensor(item["meta"].num_colors, dtype=torch.float32) for item in batch], dim=0)
-        color_map = torch.stack([torch.tensor(item["meta"].color_map, dtype=torch.float32) for item in batch], dim=0).reshape(-1,10)
 
         return TensorDict(
             {
@@ -75,12 +74,10 @@ def create_dataloader(config: Dict[str, Any]):
                 "area": area,
                 "grid_size": grid_size,
                 "num_colors": num_colors,
-                "color_map": color_map,
                 
                 "predicted_area": None,
                 "predicted_grid_size": None,
                 "predicted_num_colors": None,
-                "predicted_color_map": None,
 
                 "presence_roll": roll_augmentations,
                 "presence_scale_grid": scale_grid_augmentations,
@@ -175,14 +172,6 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                     "hidden_size": downstream_attributes_config[key]['hidden_size'],
                     "output_size": downstream_attributes_config[key]['output_size']
                 } for key in downstream_attributes_config.keys()
-                if key !='color_map'
-            } | {
-                key: {
-                    "input_size": shared_model_config['latent_size'],
-                    "output_size": downstream_attributes_config[key]['output_size']
-                } for key in downstream_attributes_config.keys()
-                if key == 'color_map'
-
             },
         }
     ).to(get_device())
