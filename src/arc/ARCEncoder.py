@@ -285,54 +285,9 @@ class MultiTaskEncoder(L.LightningModule):
         else:
             L0_for_computation = self.L0
 
-        # Get task weights. Compute gradient norms for each task
+        # Get task weights
         w = self._task_weights()
-        G = []
         loss_total = torch.sum((w * loss))
-
-        def _get_gradient(relevant_weighted_losses, params) -> torch.Tensor:
-            gradients = torch.autograd.grad(relevant_weighted_losses, params, retain_graph=True, create_graph=True, allow_unused=True)
-            list_of_gradients = [g for g in gradients if g is not None]
-
-            if list_of_gradients:
-                return torch.norm(torch.stack([g.norm() for g in list_of_gradients]), 2)
-            return torch.tensor(0.0, device=loss.device, requires_grad=True)
-
-        # Reconstruction task gradient norm
-        G.append(
-            _get_gradient(w[0] * loss[0], 
-            all_params.get("online_encoder") + all_params.get("decoder"))
-        )
-        
-        # Attribute prediction tasks gradient norms
-        for attribute in self.downstream_attributes:
-            G.append(_get_gradient(
-                w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
-                all_params.get("online_encoder") + all_params.get("attribute_predictors").get(attribute)
-            ))
-        
-        # Attribute detection tasks gradient norms
-        for key in self.task_sensitives:
-            G.append(_get_gradient(
-                w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")],  
-                all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
-            ))
-        
-        # Attribute invariant tasks gradient norms
-        for key in self.task_invariants:
-            G.append(_get_gradient(
-                w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
-                all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
-            ))
-        # Compute mean gradient norm
-        G = torch.stack(G)
-        mean_G = G.mean()
-
-        loss_hat = (loss.detach() / (L0_for_computation + 1e-8))
-        r = loss_hat / loss_hat.mean()
-        target_G = mean_G.detach() * (r ** self.alpha)
-        
-        loss_grad = torch.sum(torch.abs(G - target_G))
 
         # Update parameters
         opt_model.zero_grad()
@@ -348,9 +303,7 @@ class MultiTaskEncoder(L.LightningModule):
                 # Compute gradient for each task
                 for task_idx in range(self.num_tasks):
                     # Zero gradients before computing task-specific gradient
-                    for param in shared_params:
-                        if param.grad is not None:
-                            param.grad.zero_()
+                    opt_model.zero_grad()
                     
                     # Compute gradient for this specific task
                     task_loss = w[task_idx] * loss[task_idx]
@@ -380,6 +333,10 @@ class MultiTaskEncoder(L.LightningModule):
                 num_tasks = len(task_gradients)
                 projected_gradients = {i: task_gradients[i].clone() for i in range(num_tasks)}
                 
+                # Track gradient conflict statistics
+                conflicts = 0
+                total_comparisons = 0
+                
                 # Apply gradient surgery
                 for i in range(num_tasks):
                     for j in range(num_tasks):
@@ -392,13 +349,20 @@ class MultiTaskEncoder(L.LightningModule):
                             norm_i = torch.norm(g_i, p=2)
                             norm_j = torch.norm(g_j, p=2)
                             
+                            total_comparisons += 1
                             if norm_i > 0 and norm_j > 0:
                                 cosine_sim = dot_product / (norm_i * norm_j)
                                 
                                 # Project if gradients conflict (negative cosine similarity)
                                 if cosine_sim < 0:
+                                    conflicts += 1
                                     projection = (dot_product / (norm_j ** 2)) * g_j
                                     projected_gradients[i] = g_i - projection
+                
+                # Log conflict statistics
+                if total_comparisons > 0:
+                    conflict_ratio = conflicts / total_comparisons
+                    self.log("train/gradient_conflicts", conflict_ratio, prog_bar=False)
                 
                 # Average the projected gradients
                 final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
@@ -413,20 +377,80 @@ class MultiTaskEncoder(L.LightningModule):
                 # Split the flattened gradient back to parameter shapes
                 start_idx = 0
                 for param, size, shape in zip(shared_params, param_sizes, param_shapes):
-                    if param.grad is not None:
-                        param_grad = final_gradient[start_idx:start_idx + size].reshape(shape)
-                        param.grad.data = param_grad
+                    param_grad = final_gradient[start_idx:start_idx + size].reshape(shape)
+                    param.grad = param_grad
                     start_idx += size
 
-            # Apply PCGrad algorithm
+            # Apply PCGrad algorithm to shared encoder
             task_gradients = _get_task_gradients()
             final_gradient = _apply_pcgrad(task_gradients)
             _apply_gradients_to_params(final_gradient)
+            
+            # Compute gradients for task-specific parameters normally
+            opt_model.zero_grad()  # Clear gradients again
+            loss_total.backward()
+            
+            # Apply projected gradients to shared encoder (overwrite the backward() gradients)
+            _apply_gradients_to_params(final_gradient)
+            
         else:
-            # Standard gradient computation
+            # Standard gradient computation with GradNorm
+            def _get_gradient(relevant_weighted_losses, params) -> torch.Tensor:
+                gradients = torch.autograd.grad(relevant_weighted_losses, params, retain_graph=True, create_graph=True, allow_unused=True)
+                list_of_gradients = [g for g in gradients if g is not None]
+
+                if list_of_gradients:
+                    return torch.norm(torch.stack([g.norm() for g in list_of_gradients]), 2)
+                return torch.tensor(0.0, device=loss.device, requires_grad=True)
+
+            G = []
+            # Reconstruction task gradient norm
+            G.append(
+                _get_gradient(w[0] * loss[0], 
+                all_params.get("online_encoder") + all_params.get("decoder"))
+            )
+            
+            # Attribute prediction tasks gradient norms
+            for attribute in self.downstream_attributes:
+                G.append(_get_gradient(
+                    w[key_to_idx.get(f"downstream_{attribute}")] * loss[key_to_idx.get(f"downstream_{attribute}")], 
+                    all_params.get("online_encoder") + all_params.get("attribute_predictors").get(attribute)
+                ))
+            
+            # Attribute detection tasks gradient norms
+            for key in self.task_sensitives:
+                G.append(_get_gradient(
+                    w[key_to_idx.get(f"sensitive_{key}")] * loss[key_to_idx.get(f"sensitive_{key}")],  
+                    all_params.get("online_encoder") + all_params.get("attribute_detectors").get(key)
+                ))
+            
+            # Attribute invariant tasks gradient norms
+            for key in self.task_invariants:
+                G.append(_get_gradient(
+                    w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
+                    all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
+                ))
+            
+            # Compute mean gradient norm
+            G = torch.stack(G)
+            mean_G = G.mean()
+
+            loss_hat = (loss.detach() / (L0_for_computation + 1e-8))
+            r = loss_hat / loss_hat.mean()
+            target_G = mean_G.detach() * (r ** self.alpha)
+            
+            loss_grad = torch.sum(torch.abs(G - target_G))
+            
             loss_total.backward(retain_graph=True)
             loss_grad.backward()
 
+        # Apply gradient clipping for stability
+        torch.nn.utils.clip_grad_norm_(
+            [p for params_list in all_params.values() if isinstance(params_list, list) for p in params_list] +
+            [p for params_dict in all_params.values() if isinstance(params_dict, dict) for params_list in params_dict.values() for p in params_list],
+            max_norm=1.0
+        )
+        
         opt_model.step()
         opt_w.step()
 
@@ -437,20 +461,22 @@ class MultiTaskEncoder(L.LightningModule):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
 
         # Log metrics and updates
-        self.log_dict(
-            {
-                "train/total_loss": loss_total.detach(),
-                "train/loss_grad": loss_grad.detach(),
-                "train/reconstruction_loss": reconstruction_loss.detach(),
-                "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean(),
-                "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean(),
-            } | 
-            {
-                f"train/attribute_prediction_{key}_loss": downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1] 
-                    for key in self.downstream_attributes
-            },
-            prog_bar=True
-        )
+        log_dict = {
+            "train/total_loss": loss_total.detach(),
+            "train/reconstruction_loss": reconstruction_loss.detach(),
+            "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
+            "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
+        }
+        
+        # Add attribute prediction losses
+        for key in self.downstream_attributes:
+            log_dict[f"train/attribute_prediction_{key}_loss"] = downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1]
+        
+        # Add loss_grad only if not using PCGrad (since GradNorm isn't computed with PCGrad)
+        if not self.use_pcgrad:
+            log_dict["train/loss_grad"] = loss_grad.detach()
+        
+        self.log_dict(log_dict, prog_bar=True)
 
     def validation_step(self, batch, batch_idx):
 
