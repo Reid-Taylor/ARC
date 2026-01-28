@@ -5,8 +5,8 @@ transformation_dimension_size = 512
 [model.encoder]
 grid_size = 900
 attention_sizes = [512, 1024, 1024]
-learning_rate = 0.005
-alpha = 0.9
+learning_rate = 0.001
+alpha = 0.8
 tau = 0.85
 [model.transformer]
 learning_rate = 0.001
