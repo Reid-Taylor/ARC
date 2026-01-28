@@ -361,8 +361,8 @@ class MultiTaskEncoder(L.LightningModule):
                 
                 # Log conflict statistics
                 if total_comparisons > 0:
+                    global conflict_ratio
                     conflict_ratio = conflicts / total_comparisons
-                    self.log("train/gradient_conflicts", conflict_ratio, prog_bar=False)
                 
                 # Average the projected gradients
                 final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
@@ -473,8 +473,11 @@ class MultiTaskEncoder(L.LightningModule):
             log_dict[f"train/attribute_prediction_{key}_loss"] = downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1]
         
         # Add loss_grad only if not using PCGrad (since GradNorm isn't computed with PCGrad)
-        if not self.use_pcgrad:
+        if self.use_pcgrad:
+            log_dict["conflict_ratio"] = conflict_ratio
+        else:
             log_dict["train/loss_grad"] = loss_grad.detach()
+
         
         self.log_dict(log_dict, prog_bar=True)
 
