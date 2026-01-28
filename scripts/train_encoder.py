@@ -136,6 +136,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
         },
         learning_rate=learning_rate,
         alpha=alpha,
+        use_pcgrad=config['model']['encoder']['use_pcgrad'],
         tau=config['model']['encoder']['tau'],
         **{
             "Encoder": {

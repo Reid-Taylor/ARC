@@ -20,6 +20,7 @@ class MultiTaskEncoder(L.LightningModule):
             learning_rate:float=1e-3, 
             alpha:float=0.85, 
             tau:float=0.85,
+            use_pcgrad:bool=True,
             **network_dimensions
         ) -> None:
         super().__init__()
@@ -113,6 +114,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.alpha: float = alpha
         self.tau:float = tau
+        self.use_pcgrad: bool = use_pcgrad
 
         self.register_buffer("L0", torch.zeros(self.num_tasks))
         self.L0_initialized: bool = False
@@ -322,7 +324,6 @@ class MultiTaskEncoder(L.LightningModule):
                 w[key_to_idx.get(f"invariant_{key}")] * loss[key_to_idx.get(f"invariant_{key}")], 
                 all_params.get("online_encoder") + all_params.get('online_projector') + all_params.get('online_predictor')
             ))
-        
         # Compute mean gradient norm
         G = torch.stack(G)
         mean_G = G.mean()
@@ -337,8 +338,94 @@ class MultiTaskEncoder(L.LightningModule):
         opt_model.zero_grad()
         opt_w.zero_grad()
 
-        loss_total.backward(retain_graph=True)
-        loss_grad.backward()
+        # Apply PCGrad before final optimization if enabled
+        if self.use_pcgrad:
+            def _get_task_gradients() -> Dict[int, torch.Tensor]:
+                """Compute gradients for each task on the shared encoder parameters."""
+                task_gradients = {}
+                shared_params = all_params['online_encoder']
+                
+                # Compute gradient for each task
+                for task_idx in range(self.num_tasks):
+                    # Zero gradients before computing task-specific gradient
+                    for param in shared_params:
+                        if param.grad is not None:
+                            param.grad.zero_()
+                    
+                    # Compute gradient for this specific task
+                    task_loss = w[task_idx] * loss[task_idx]
+                    task_grads = torch.autograd.grad(
+                        task_loss, 
+                        shared_params, 
+                        retain_graph=True, 
+                        create_graph=False,
+                        allow_unused=True
+                    )
+                    
+                    # Flatten and concatenate gradients
+                    flattened_grads = []
+                    for grad in task_grads:
+                        if grad is not None:
+                            flattened_grads.append(grad.flatten())
+                        else:
+                            # Handle None gradients with zeros
+                            flattened_grads.append(torch.zeros(1, device=loss.device))
+                    
+                    task_gradients[task_idx] = torch.cat(flattened_grads)
+                
+                return task_gradients
+
+            def _apply_pcgrad(task_gradients: Dict[int, torch.Tensor]) -> torch.Tensor:
+                """Apply PCGrad algorithm to resolve gradient conflicts."""
+                num_tasks = len(task_gradients)
+                projected_gradients = {i: task_gradients[i].clone() for i in range(num_tasks)}
+                
+                # Apply gradient surgery
+                for i in range(num_tasks):
+                    for j in range(num_tasks):
+                        if i != j:
+                            g_i = projected_gradients[i]
+                            g_j = task_gradients[j]  # Use original gradients for projection
+                            
+                            # Compute cosine similarity
+                            dot_product = torch.dot(g_i, g_j)
+                            norm_i = torch.norm(g_i, p=2)
+                            norm_j = torch.norm(g_j, p=2)
+                            
+                            if norm_i > 0 and norm_j > 0:
+                                cosine_sim = dot_product / (norm_i * norm_j)
+                                
+                                # Project if gradients conflict (negative cosine similarity)
+                                if cosine_sim < 0:
+                                    projection = (dot_product / (norm_j ** 2)) * g_j
+                                    projected_gradients[i] = g_i - projection
+                
+                # Average the projected gradients
+                final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
+                return final_gradient
+
+            def _apply_gradients_to_params(final_gradient: torch.Tensor):
+                """Apply the final projected gradient to the shared encoder parameters."""
+                shared_params = all_params['online_encoder']
+                param_shapes = [p.shape for p in shared_params]
+                param_sizes = [p.numel() for p in shared_params]
+                
+                # Split the flattened gradient back to parameter shapes
+                start_idx = 0
+                for param, size, shape in zip(shared_params, param_sizes, param_shapes):
+                    if param.grad is not None:
+                        param_grad = final_gradient[start_idx:start_idx + size].reshape(shape)
+                        param.grad.data = param_grad
+                    start_idx += size
+
+            # Apply PCGrad algorithm
+            task_gradients = _get_task_gradients()
+            final_gradient = _apply_pcgrad(task_gradients)
+            _apply_gradients_to_params(final_gradient)
+        else:
+            # Standard gradient computation
+            loss_total.backward(retain_graph=True)
+            loss_grad.backward()
 
         opt_model.step()
         opt_w.step()

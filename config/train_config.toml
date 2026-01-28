@@ -8,6 +8,7 @@ attention_sizes = [512, 1024, 1024]
 learning_rate = 0.001
 alpha = 0.8
 tau = 0.85
+use_pcgrad = true
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
