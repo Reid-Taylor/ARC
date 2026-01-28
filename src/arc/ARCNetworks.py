@@ -163,8 +163,10 @@ class Decoder(torch.nn.Module):
         self.head_2 = AttentionHead(attention_input, attention_head, attention_output)
         self.head_3 = AttentionHead(attention_input, attention_head, attention_output)
         
-        self.fc_out = torch.nn.Linear(attention_output*3, output_size)
-    def forward(self, x) -> Float[torch.Tensor, "B 900"]:
+        # Output 11 classes for each of the 900 positions
+        self.fc_out = torch.nn.Linear(attention_output*3, output_size * 11)
+    
+    def forward(self, x) -> Float[torch.Tensor, "B 900 11"]:
         attended_input = self.fully_connected(x)
 
         input_1: torch.Tensor = self.head_1(attended_input)
@@ -173,7 +175,9 @@ class Decoder(torch.nn.Module):
 
         attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
 
-        return self.fc_out(attended_layers)
+        # Reshape to (batch_size, 900, 11) for cross-entropy loss
+        logits = self.fc_out(attended_layers)
+        return logits.view(-1, 900, 11)
     
 @beartype
 class TransformationSpaceProjection(torch.nn.Module):

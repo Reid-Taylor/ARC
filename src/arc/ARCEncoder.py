@@ -233,10 +233,23 @@ class MultiTaskEncoder(L.LightningModule):
         all_params = self._get_parameters()
 
         # Reconstruction Task Loss
+        # predicted_grid shape: (batch_size, 900, 11)
+        # batch['encoded_grid'] shape: (batch_size, 900)
+        # Need to flatten spatial dimension for cross-entropy
+        
+        batch_size = results['standard']["predicted_grid"].size(0)
+        
+        # Reshape predictions to (batch_size * 900, 11)
+        pred_standard = results['standard']["predicted_grid"].view(-1, 11)
+        pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
+        
+        # Reshape targets to (batch_size * 900,)
+        targets = batch['encoded_grid'].long().view(-1)
+        
         reconstruction_loss = 0.5 * \
-            (F.mse_loss(results['standard']["predicted_grid"], batch["encoded_grid"]) 
+            (F.cross_entropy(pred_standard, targets) 
                 + 
-            F.mse_loss(results['mirrored']["predicted_grid"], batch["encoded_grid"]))
+            F.cross_entropy(pred_mirrored, targets))
 
         key_to_idx = {
             'reconstruction_loss':0
@@ -486,10 +499,15 @@ class MultiTaskEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
         # Reconstruction Task Loss
+        # Apply same tensor reshaping as in training_step
+        pred_standard = results['standard']["predicted_grid"].view(-1, 11)
+        pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
+        targets = batch['encoded_grid'].long().view(-1)
+        
         reconstruction_loss = 0.5 * \
-            (F.mse_loss(results['standard']["predicted_grid"], batch["encoded_grid"]) 
+            (F.cross_entropy(pred_standard, targets) 
                 + 
-            F.mse_loss(results['mirrored']["predicted_grid"], batch["encoded_grid"]))
+            F.cross_entropy(pred_mirrored, targets))
 
         key_to_idx = {
             'reconstruction_loss':0
