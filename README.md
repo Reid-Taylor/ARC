@@ -8,7 +8,7 @@ GradNorm introduces a method for dynamically balancing multiple loss functions i
 
 ### Gradient Surgery: PCGrad
 
-After implementing GradNorm and experimenting with the multi-task learning objective provided by this approach, we observed many failings to converge upon an ideal solution. After a pointed literature review aimed at addressing this, we discovered PCGrad and gradient surgery as an approach to better balance gradient descent by removing gradient conflicts, while still normalizing the gradient magnitude. Throughout the examples and benchmarks provided within the literature, as well as empirically through my own experiments here, performance of PCGrad is superior to GradNorm, for multi-task gradient balancing. 
+After implementing GradNorm and experimenting with the multi-task learning objective provided by this approach, we observed many failings to converge upon an ideal solution. After a pointed literature review aimed at addressing this, we discovered PCGrad and gradient surgery as an approach to better balance gradient descent by removing gradient conflicts, while still normalizing the gradient magnitude. Throughout the examples and benchmarks provided within the literature, as well as empirically through my own experiments here, performance of PCGrad is superior to GradNorm, for multi-task gradient balancing.
 
 ### SimCLR: A Simple Framework for Contrastive Learning of Visual Representations
 

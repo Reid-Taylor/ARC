@@ -361,8 +361,7 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.downstream_attributes:
             log_dict[f"train/attribute_prediction_{key}_loss"] = downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1]
         
-        if self.use_pcgrad:
-            log_dict["train/conflict_ratio"] = conflict_ratio
+        log_dict["train/conflict_ratio"] = conflict_ratio
         
         self.log_dict(log_dict, prog_bar=True)
 
