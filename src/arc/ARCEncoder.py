@@ -213,8 +213,6 @@ class MultiTaskEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
         all_params = self._get_parameters()
 
-        batch_size = results['standard']["predicted_grid"].size(0)
-
         pred_standard = results['standard']["predicted_grid"].view(-1, 11)
         pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
         

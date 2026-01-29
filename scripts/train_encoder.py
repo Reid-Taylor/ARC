@@ -196,14 +196,14 @@ def setup_trainer(
     checkpoint_callback = ModelCheckpoint(
         dirpath=model_save_path,
         filename="arc_encoder_{epoch:02d}_{val_loss:.2f}",
-        monitor="val_loss",
+        monitor="val/val_loss",
         mode="min",
         save_top_k=3,
         save_last=True
     )
     
     early_stopping = EarlyStopping(
-        monitor="val_loss",
+        monitor="val/val_loss",
         patience=4,
         mode="min"
     )
