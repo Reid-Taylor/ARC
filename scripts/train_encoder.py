@@ -136,7 +136,6 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
         },
         learning_rate=learning_rate,
         alpha=alpha,
-        use_pcgrad=config['model']['encoder']['use_pcgrad'],
         tau=config['model']['encoder']['tau'],
         **{
             "Encoder": {
@@ -164,7 +163,6 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                     "output_size": 1,
                     "activation": contrastive_attributes_config[key].get('activation', "sigmoid")
                 } for key in contrastive_attributes_config.keys() 
-                if contrastive_attributes_config[key].get('task_type', None) == 'task_sensitive'
             },
             "Attribute Predictor": {
                 key: {

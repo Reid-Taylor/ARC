@@ -77,14 +77,11 @@ class MultiTaskEncoder(L.LightningModule):
             out_keys=["predicted_grid"]
         )
 
-        self.task_invariants: list[str] = []
         self.task_sensitives: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
 
         for key, value in task_type.items():
-            if value == "task_invariant":
-                self.task_invariants.append(key)
-            elif value == "task_sensitive":
+            if value == "task_sensitive":
                 self.task_sensitives.append(key)
                 setattr(self, f"attribute_detector_{key}", TensorDictModule(
                     FullyConnectedLayer(
@@ -107,14 +104,13 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_invariants)
-        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + task invariant attribute tasks
+        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives)
+        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks
         
         self.lr: float = learning_rate
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.alpha: float = alpha
         self.tau:float = tau
-        self.use_pcgrad: bool = use_pcgrad
 
         self.automatic_optimization: bool = False
 
@@ -218,10 +214,11 @@ class MultiTaskEncoder(L.LightningModule):
         
         targets = batch['encoded_grid'].long().view(-1)
         
-        reconstruction_loss = 0.5 * \
-            (F.cross_entropy(pred_standard, targets) 
+        reconstruction_loss = 0.5 * (
+            F.cross_entropy(pred_standard, targets) 
                 + 
-            F.cross_entropy(pred_mirrored, targets))
+            F.cross_entropy(pred_mirrored, targets)
+        )
 
         key_to_idx = {
             'reconstruction_loss':0
@@ -230,7 +227,6 @@ class MultiTaskEncoder(L.LightningModule):
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
-            
             pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
             targets = batch[key].add(-1).long().view(-1)
             key_to_idx[f'downstream_{key}'] = len(key_to_idx)
@@ -251,17 +247,7 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
         
-        task_invariant_loss = []
-        for key in self.task_invariants:
-            key_to_idx[f'invariant_{key}'] = len(key_to_idx)
-            task_invariant_loss.append(
-                F.mse_loss(
-                    results['standard']["online_representation"], 
-                    results['standard']["target_representation"].detach()
-                )
-            )
-
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss)
 
         w = self._task_weights()
         loss_total = torch.sum((w * loss))
@@ -370,7 +356,6 @@ class MultiTaskEncoder(L.LightningModule):
             "train/total_loss": loss_total.detach(),
             "train/reconstruction_loss": reconstruction_loss.detach(),
             "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
-            "train/task_ignorance_loss": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
         }
         
         for key in self.downstream_attributes:
@@ -422,17 +407,7 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
         
-        task_invariant_loss = []
-        for key in self.task_invariants:
-            key_to_idx[f'invariant_{key}'] = len(key_to_idx)
-            task_invariant_loss.append(
-                F.mse_loss(
-                    results['standard']["online_representation"], 
-                    results['standard']["target_representation"].detach()
-                )
-            )
-
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss)
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss)
 
         w = self._task_weights()
         loss_total = torch.sum((w * loss))
