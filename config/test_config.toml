@@ -4,7 +4,8 @@ latent_size = 32
 transformation_dimension_size = 10
 [model.encoder]
 grid_size = 900
-attention_sizes = [10, 10, 10]
+hidden_sizes = [1024, 4]
+attention_sizes = [10,10,10]
 learning_rate = 0.001
 alpha = 0.80
 tau = 0.85
@@ -13,8 +14,8 @@ use_pcgrad = true
 learning_rate = 0.001
 alpha = 0.9
 [model.encoder.downstream_attributes]
-grid_size = {hidden_size = 10, output_size = 2}
-num_colors = {hidden_size = 10, output_size = 1}
+grid_size = {hidden_size = 10, output_size = 2, output_channels=30}
+num_colors = {hidden_size = 10, output_size = 1, output_channels=10}
 [model.encoder.contrastive_attributes]
 area = {task_type = "task_invariant"}
 color_map = {task_type = "task_invariant"}

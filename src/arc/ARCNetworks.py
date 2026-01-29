@@ -80,16 +80,17 @@ class AttributeHead(torch.nn.Module):
     """
     A network which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10):
+    def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10, output_channels:int=11):
         super().__init__()
         self.name = name
+        self.channels = output_channels
         self.layer1 = FullyConnectedLayer(
             input_size=input_size,
             output_size=hidden_size
         )
         self.layer2 = FullyConnectedLayer(
             input_size=hidden_size,
-            output_size=output_size
+            output_size=output_size*output_channels
         )
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
@@ -152,31 +153,25 @@ class Decoder(torch.nn.Module):
     """
     A decoder module which uses attention heads to decode latent representations back into a flattened grid.
     """
-    def __init__(self, input_size:int=64, attention_sizes:list[int]=(128, 71, 64), output_size:int=30*30):
+    def __init__(self, input_size:int=64, hidden_sizes:list[int]=(128, 4), output_size:int=30*30):
         super().__init__()
 
-        attention_input, attention_head, attention_output = attention_sizes
+        hidden_dims, hidden_layers = hidden_sizes
 
-        self.fully_connected = torch.nn.Linear(input_size, attention_input)
+        self.fully_connected = FullyConnectedLayer(input_size=input_size, output_size=hidden_dims)
 
-        self.head_1 = AttentionHead(attention_input, attention_head, attention_output)
-        self.head_2 = AttentionHead(attention_input, attention_head, attention_output)
-        self.head_3 = AttentionHead(attention_input, attention_head, attention_output)
+        self.hidden_layers = [FullyConnectedLayer(input_size=hidden_dims, output_size=hidden_dims) for _ in range(hidden_layers)]
         
-        # Output 11 classes for each of the 900 positions
-        self.fc_out = torch.nn.Linear(attention_output*3, output_size * 11)
+        self.fc_out = FullyConnectedLayer(input_size=hidden_dims, output_size=output_size * 11)
     
     def forward(self, x) -> Float[torch.Tensor, "B 900 11"]:
-        attended_input = self.fully_connected(x)
+        x = self.fully_connected(x)
 
-        input_1: torch.Tensor = self.head_1(attended_input)
-        input_2: torch.Tensor = self.head_2(attended_input)
-        input_3: torch.Tensor = self.head_3(attended_input)
+        for layer in self.hidden_layers:
+            x = layer(x)
 
-        attended_layers = torch.cat((input_1, input_2, input_3), dim=-1)
+        logits = self.fc_out(x)
 
-        # Reshape to (batch_size, 900, 11) for cross-entropy loss
-        logits = self.fc_out(attended_layers)
         return logits.view(-1, 900, 11)
     
 @beartype

@@ -33,7 +33,7 @@ class MultiTaskEncoder(L.LightningModule):
             out_keys=["online_embedding"]
         )
         self.online_projector = TensorDictModule(
-            AttributeHead(
+            FullyConnectedLayer(
                 "Contrastive Projection (Online)",
                 **network_dimensions["Contrastive Projection"]
             ),
@@ -51,7 +51,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
         
         self.target_projector = TensorDictModule(
-            AttributeHead(
+            FullyConnectedLayer(
                 "Contrastive Projection (Target)",
                 **network_dimensions["Contrastive Projection"]
             ),
@@ -146,31 +146,23 @@ class MultiTaskEncoder(L.LightningModule):
         return w
         
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
-        # Encode input grid into latent embedding space
         z = self.online_encoder(x['encoded_grid'], x['padded_grid'])
 
-        # Reconstruct input grid from embedding
         x_hat = self.decoder(z)
 
-        # Predict attributes from embedding
         y_hat = {}
         for key in self.downstream_attributes:
             y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
 
-        # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
         c = self.online_projector(z)
-        # Prediction of c_tilde given c
         c_tilde_hat = self.online_predictor(c)
 
-        # Encode augmented input into the latent embedding space, using target encoder
         z_tilde = self.target_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
-        # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 
-        # Predict task-sensitive attributes from our contrastive representation. We want to discriminate these well, to enforce structure upon our latent space.
         attribute_detections = {}
         for key in self.task_sensitives:
-            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
+            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(z)
 
         standard_forward = {
             "online_embedding": z,
@@ -185,28 +177,21 @@ class MultiTaskEncoder(L.LightningModule):
 
         z = self.online_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
 
-        # Reconstruct input grid from embedding
         x_hat = self.decoder(z)
 
-        # Predict attributes from embedding
         y_hat = {}
         for key in self.downstream_attributes:
             y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
 
-        # Projections of embedding into a new latent space specifically for contrastive learning (Inspired by SimCLR)
         c = self.online_projector(z)
-        # Prediction of c_tilde given c
         c_tilde_hat = self.online_predictor(c)
 
-        # Encode augmented input into the latent embedding space, using target encoder
         z_tilde = self.target_encoder(x['encoded_grid'], x['padded_grid'])
-        # We project the latent embedding into the contrastive learning latent space
         c_tilde = self.target_projector(z_tilde)
 
-        # Predict task-sensitive attributes from our contrastive representation. We want to discriminate these well, to enforce structure upon our latent space.
         attribute_detections = {}
         for key in self.task_sensitives:
-            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(c)
+            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(z)
 
         mirrored_forward = {
             "online_embedding": z,
@@ -232,18 +217,11 @@ class MultiTaskEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
         all_params = self._get_parameters()
 
-        # Reconstruction Task Loss
-        # predicted_grid shape: (batch_size, 900, 11)
-        # batch['encoded_grid'] shape: (batch_size, 900)
-        # Need to flatten spatial dimension for cross-entropy
-        
         batch_size = results['standard']["predicted_grid"].size(0)
-        
-        # Reshape predictions to (batch_size * 900, 11)
+
         pred_standard = results['standard']["predicted_grid"].view(-1, 11)
         pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
         
-        # Reshape targets to (batch_size * 900,)
         targets = batch['encoded_grid'].long().view(-1)
         
         reconstruction_loss = 0.5 * \
@@ -258,11 +236,15 @@ class MultiTaskEncoder(L.LightningModule):
         # Downstream Attribute Recovery Task Loss
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
+            channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
+            
+            pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
+            targets = batch[key].add(-1).long().view(-1)
             key_to_idx[f'downstream_{key}'] = len(key_to_idx)
             downstream_attribute_loss.append(
-                F.mse_loss(
-                    results["standard"]["predicted_downstream_attributes"][key],
-                    batch[key]
+                F.cross_entropy(
+                    pred_standard,
+                    targets
                 )
             ) 
 
@@ -516,16 +498,17 @@ class MultiTaskEncoder(L.LightningModule):
         # Downstream Attribute Recovery Task Loss
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
+            # Get the correct channel dimension from the attribute predictor configuration
+            channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
+            
+            pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
+            targets = batch[key].add(-1).long().view(-1)
             key_to_idx[f'downstream_{key}'] = len(key_to_idx)
             downstream_attribute_loss.append(
-                (F.mse_loss(
-                    results["standard"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                ) + 
-                F.mse_loss(
-                    results["mirrored"]["predicted_downstream_attributes"][key],
-                    batch[key]
-                )) * 0.5
+                F.cross_entropy(
+                    pred_standard,
+                    targets
+                )
             ) 
 
         # Task Sensitive Attribute Detection Loss
