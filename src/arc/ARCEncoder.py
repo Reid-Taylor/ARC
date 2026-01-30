@@ -1,12 +1,13 @@
 from __future__ import annotations
 from beartype import beartype
-from beartype.typing import Dict, Union, List
+from beartype.typing import Dict, List
 import lightning as L
 import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
+from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
 
 # NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
 # NetworkParameters = Dict[str, Union[List[torch.nn.Parameter], Dict[str, List[torch.nn.Parameter]]]]
@@ -18,9 +19,7 @@ class MultiTaskEncoder(L.LightningModule):
             attribute_requirements: List[str], 
             task_type: Dict[str, str], 
             learning_rate:float=1e-3, 
-            alpha:float=0.85, 
             tau:float=0.85,
-            use_pcgrad:bool=True,
             **network_dimensions
         ) -> None:
         super().__init__()
@@ -104,12 +103,11 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives)
-        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks
+        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + 1
+        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + embedding dissimilarity
         
         self.lr: float = learning_rate
         self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
-        self.alpha: float = alpha
         self.tau:float = tau
 
         self.automatic_optimization: bool = False
@@ -220,16 +218,11 @@ class MultiTaskEncoder(L.LightningModule):
             F.cross_entropy(pred_mirrored, targets)
         )
 
-        key_to_idx = {
-            'reconstruction_loss':0
-        }
-
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
             pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
             targets = batch[key].add(-1).long().view(-1)
-            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
             downstream_attribute_loss.append(
                 F.cross_entropy(
                     pred_standard,
@@ -239,15 +232,19 @@ class MultiTaskEncoder(L.LightningModule):
 
         task_sensitive_loss = []
         for key in self.task_sensitives:
-            key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
             task_sensitive_loss.append(
                 F.binary_cross_entropy(
                     results['standard']["predicted_task_sensitive_attributes"][key], 
                     batch[f"presence_{key}"]
                 )
             )
+
+        variable_embedding_loss = 0.0
+        for loss_function in [entropy_density_loss, anti_sparsity_loss]:
+            variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
+            variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
         
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss)
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss])
 
         w = self._task_weights()
         loss_total = torch.sum((w * loss))
@@ -356,10 +353,11 @@ class MultiTaskEncoder(L.LightningModule):
             "train/total_loss": loss_total.detach(),
             "train/reconstruction_loss": reconstruction_loss.detach(),
             "train/task_detection_loss": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
+            "train/embedding_dissimilarity": variable_embedding_loss
         }
         
-        for key in self.downstream_attributes:
-            log_dict[f"train/attribute_prediction_{key}_loss"] = downstream_attribute_loss[key_to_idx[f'downstream_{key}'] - 1]
+        for key, loss in zip(self.downstream_attributes,downstream_attribute_loss):
+            log_dict[f"train/attribute_prediction_{key}_loss"] = loss
         
         log_dict["train/conflict_ratio"] = conflict_ratio
         
@@ -378,17 +376,12 @@ class MultiTaskEncoder(L.LightningModule):
                 + 
             F.cross_entropy(pred_mirrored, targets))
 
-        key_to_idx = {
-            'reconstruction_loss':0
-        }
-
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
             
             pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
             targets = batch[key].add(-1).long().view(-1)
-            key_to_idx[f'downstream_{key}'] = len(key_to_idx)
             downstream_attribute_loss.append(
                 F.cross_entropy(
                     pred_standard,
@@ -398,7 +391,6 @@ class MultiTaskEncoder(L.LightningModule):
 
         task_sensitive_loss = []
         for key in self.task_sensitives:
-            key_to_idx[f'sensitive_{key}'] = len(key_to_idx)
             task_sensitive_loss.append(
                 F.binary_cross_entropy(
                     results['standard']["predicted_task_sensitive_attributes"][key], 
@@ -406,7 +398,12 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
         
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss)
+        variable_embedding_loss = 0.0
+        for loss_function in [variance_density_loss, entropy_density_loss]:
+            variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
+            variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
+        
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss])
 
         w = self._task_weights()
         loss_total = torch.sum((w * loss))

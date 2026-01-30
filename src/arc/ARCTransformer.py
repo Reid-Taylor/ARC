@@ -1,13 +1,12 @@
 from __future__ import annotations
 from beartype import beartype
-from beartype.typing import Dict, List
+from beartype.typing import List
 import lightning as L
 import torch
 from torch.nn import functional as F
-from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import TransformationSpaceProjection
-from src.arc.ARCDataClasses import ARCProblemSet
+from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
 from itertools import combinations
 
 @beartype
@@ -200,23 +199,6 @@ class TransformationDescriber(L.LightningModule):
                     torch.zeros_like(x)
                 )
             )
-
-        def entropy_density_loss(embeddings: torch.Tensor, lambda_entropy: float = 0.01) -> torch.Tensor:
-            """Encourage high entropy in embedding magnitudes"""
-            # Normalize to probability distribution
-            probs = F.softmax(torch.abs(embeddings), dim=-1)
-            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
-            return lambda_entropy * torch.mean(-entropy)  # Negative to encourage high entropy
-        
-        def variance_density_loss(embeddings: torch.Tensor, lambda_var: float = 0.01) -> torch.Tensor:
-            """Encourage high variance to prevent mode collapse"""
-            variance = torch.var(embeddings, dim=-1)
-            return lambda_var * torch.mean(-variance)
-
-        def anti_sparsity_loss(embeddings: torch.Tensor, threshold: float = 0.1, lambda_sparse: float = 0.01) -> torch.Tensor:
-            """Penalize activations below threshold"""
-            sparse_penalty = torch.mean(torch.relu(threshold - torch.abs(embeddings)))
-            return lambda_sparse * sparse_penalty
 
         loss = torch.stack(
             [high_proximity_loss] + 

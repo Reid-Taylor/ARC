@@ -1,0 +1,19 @@
+import torch
+from torch.nn import functional as F
+
+def entropy_density_loss(embeddings: torch.Tensor, lambda_entropy: float = 0.01) -> torch.Tensor:
+    """Encourage high entropy in embedding magnitudes"""
+    # Normalize to probability distribution
+    probs = F.softmax(torch.abs(embeddings), dim=-1)
+    entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
+    return lambda_entropy * torch.mean(-entropy)  # Negative to encourage high entropy
+
+def variance_density_loss(embeddings: torch.Tensor, lambda_var: float = 0.01) -> torch.Tensor:
+    """Encourage high variance to prevent mode collapse"""
+    variance = torch.var(embeddings, dim=-1)
+    return lambda_var * torch.mean(-variance)
+
+def anti_sparsity_loss(embeddings: torch.Tensor, threshold: float = 0.1, lambda_sparse: float = 0.01) -> torch.Tensor:
+    """Penalize activations below threshold"""
+    sparse_penalty = torch.mean(torch.relu(threshold - torch.abs(embeddings)))
+    return lambda_sparse * sparse_penalty

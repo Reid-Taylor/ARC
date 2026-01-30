@@ -1,6 +1,6 @@
 [model]
 [model.shared]
-latent_size = 256
+latent_size = 317
 transformation_dimension_size = 512
 [model.encoder]
 grid_size = 900
@@ -24,8 +24,8 @@ isolate_color = {task_type = "task_sensitive", activation = "sigmoid"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 1024
-epochs = 250
+batch_size = 1317
+epochs = 1000
 [training.transformer]
 batch_size = 1
 epochs = 1
