@@ -292,7 +292,7 @@ class MultiTaskEncoder(L.LightningModule):
             
             # Apply gradient surgery
             for i in range(num_tasks):
-                for j in range(num_tasks):
+                for j in torch.randperm(num_tasks):
                     if i != j:
                         g_i = projected_gradients[i]
                         g_j = task_gradients[j]  # Use original gradients for projection
