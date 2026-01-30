@@ -8,6 +8,8 @@ from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
 from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
+from functools import partial
+
 
 # NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
 # NetworkParameters = Dict[str, Union[List[torch.nn.Parameter], Dict[str, List[torch.nn.Parameter]]]]
@@ -240,7 +242,7 @@ class MultiTaskEncoder(L.LightningModule):
             )
 
         variable_embedding_loss = 0.0
-        for loss_function in [entropy_density_loss, anti_sparsity_loss]:
+        for loss_function in [partial(anti_sparsity_loss, threshold=0.5, lambda_sparse=0.1)]:
             variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
             variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
         

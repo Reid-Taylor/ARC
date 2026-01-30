@@ -3,10 +3,9 @@ from torch.nn import functional as F
 
 def entropy_density_loss(embeddings: torch.Tensor, lambda_entropy: float = 0.01) -> torch.Tensor:
     """Encourage high entropy in embedding magnitudes"""
-    # Normalize to probability distribution
     probs = F.softmax(torch.abs(embeddings), dim=-1)
     entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=-1)
-    return lambda_entropy * torch.mean(-entropy)  # Negative to encourage high entropy
+    return lambda_entropy * torch.mean(-entropy)
 
 def variance_density_loss(embeddings: torch.Tensor, lambda_var: float = 0.01) -> torch.Tensor:
     """Encourage high variance to prevent mode collapse"""
