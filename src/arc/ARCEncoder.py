@@ -295,7 +295,7 @@ class MultiTaskEncoder(L.LightningModule):
                 for j in torch.randperm(num_tasks):
                     if i != j:
                         g_i = projected_gradients[i]
-                        g_j = task_gradients[j]  # Use original gradients for projection
+                        g_j = task_gradients[j.item()]  # Use original gradients for projection
                         
                         dot_product = torch.dot(g_i, g_j)
                         norm_i = torch.norm(g_i, p=2)
