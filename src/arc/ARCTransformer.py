@@ -36,13 +36,6 @@ class TransformationDescriber(L.LightningModule):
         This network should receive as inputs the embeddings of the example challenges and solutions. We can use contrastive learning approaches to create a "transformation" space, which is trained to create similar embeddings representing the relationships between example challenges and solutions. The relationships for examples under the same name must be encoded as near-identical--Ultimately, we will take the average of these embeddings of the many examples to provide the "transformation" description provided at test time. We can prompt the network to learn more quickly the desirable characteristics by leveraging data augmentations (of sensitive tasks, that is) to various input & (constructed) output grids to enforce the learning of transformations. We can train this first piece to explicitly learn what should encoded as the null-transformation, the identity function.
         """
         super().__init__()
-        # self.transformation_description = TensorDictModule(
-        #     TransformationSpaceProjection(
-        #         **network_dimensions["TransformationDescriber"]
-        #     ),
-        #     in_keys=["example_input_embedding","example_output_embedding", "input_randomly_augmented"],
-        #     out_keys=["transformation_description", "random_description"]
-        # )
         self.transformation_description = TransformationSpaceProjection(
             **network_dimensions["TransformationDescriber"]
         )
@@ -50,9 +43,7 @@ class TransformationDescriber(L.LightningModule):
         self.num_tasks = 7
         
         self.lr: float = learning_rate
-        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.alpha: float = alpha
-        self.custom_task_weighting = torch.tensor([1,1,0.5,2,1,1,1], dtype=torch.float32)
 
         self.register_buffer("L0", torch.zeros(self.num_tasks))
         self.L0_initialized: bool = False
@@ -63,12 +54,6 @@ class TransformationDescriber(L.LightningModule):
         params = [p for p in self.transformation_description.parameters() if p.requires_grad]
 
         return params
-    
-    def _task_weights(self) -> Float[torch.Tensor, "A"]:
-        #TODO: consider weighting across reconstruction?
-        w = F.softmax(self.raw_w, dim=0) + 1e-8
-        w = self.num_tasks * w / w.sum()
-        return w
     
     def forward(self, x):
         results = {
@@ -130,7 +115,7 @@ class TransformationDescriber(L.LightningModule):
         return results
     
     def training_step(self, batch):
-        opt_model, opt_w = self.optimizers()
+        opt_model = self.optimizers()
         results = self.forward(batch)
         all_params = self._get_parameters()
         
@@ -221,9 +206,8 @@ class TransformationDescriber(L.LightningModule):
             L0_for_computation = self.L0
 
         # Get task weights. Compute gradient norms for each task
-        w = self._task_weights()
         GRADIENT_LIST = []
-        loss_total = torch.sum((w * loss))
+        loss_total = torch.sum(loss)
 
         def _get_gradient(relevant_weighted_losses) -> List[torch.Tensor]:
             gradients = torch.autograd.grad(relevant_weighted_losses, all_params, retain_graph=True, create_graph=True, allow_unused=True)
@@ -237,7 +221,7 @@ class TransformationDescriber(L.LightningModule):
         for i in range(self.num_tasks):
             GRADIENT_LIST.append(
                 _get_gradient(
-                    w[i] * loss[i] * self.custom_task_weighting[i]
+                    loss[i]
                 )
             )
         
@@ -253,13 +237,11 @@ class TransformationDescriber(L.LightningModule):
 
         # Update parameters
         opt_model.zero_grad()
-        opt_w.zero_grad()
 
         loss_total.backward(retain_graph=True)
         loss_grad.backward()
 
         opt_model.step()
-        opt_w.step()
 
         # Log metrics and updates
         self.log_dict(
@@ -277,5 +259,5 @@ class TransformationDescriber(L.LightningModule):
             params=params,
             lr=self.lr
         )
-        opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)
-        return [opt_model, opt_w]
+
+        return opt_model
