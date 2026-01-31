@@ -109,7 +109,6 @@ class MultiTaskEncoder(L.LightningModule):
         # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + embedding dissimilarity
         
         self.lr: float = learning_rate
-        self.raw_w: Float[torch.Tensor, "A"] = torch.nn.Parameter(torch.zeros(self.num_tasks))
         self.tau:float = tau
 
         self.automatic_optimization: bool = False
@@ -132,11 +131,6 @@ class MultiTaskEncoder(L.LightningModule):
             }
         }
         return params
-
-    def _task_weights(self) -> Float[torch.Tensor, "A"]:
-        w = F.softmax(self.raw_w, dim=0) + 1e-8
-        w = self.num_tasks * w / w.sum()
-        return w
         
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
         z = self.online_encoder(x['encoded_grid'], x['padded_grid'])
@@ -205,7 +199,7 @@ class MultiTaskEncoder(L.LightningModule):
         return results
     
     def training_step(self, batch):
-        opt_model, opt_w = self.optimizers()
+        opt_model = self.optimizers()
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
         all_params = self._get_parameters()
 
@@ -248,11 +242,7 @@ class MultiTaskEncoder(L.LightningModule):
         
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss])
 
-        w = self._task_weights()
-        loss_total = torch.sum((w * loss))
-
-        opt_model.zero_grad()
-        opt_w.zero_grad()
+        loss_total = torch.sum(loss)
         
         def _get_task_gradients() -> Dict[int, torch.Tensor]:
             """Compute gradients for each task on the shared encoder parameters."""
@@ -262,7 +252,7 @@ class MultiTaskEncoder(L.LightningModule):
             for task_idx in range(self.num_tasks):
                 opt_model.zero_grad()
                 
-                task_loss = w[task_idx] * loss[task_idx]
+                task_loss = loss[task_idx]
                 task_grads = torch.autograd.grad(
                     task_loss, 
                     shared_params, 
@@ -342,7 +332,6 @@ class MultiTaskEncoder(L.LightningModule):
         )
 
         opt_model.step()
-        opt_w.step()
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
@@ -399,14 +388,13 @@ class MultiTaskEncoder(L.LightningModule):
             )
         
         variable_embedding_loss = 0.0
-        for loss_function in [variance_density_loss, entropy_density_loss]:
+        for loss_function in [partial(anti_sparsity_loss, threshold=0.5, lambda_sparse=0.1)]:
             variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
             variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
         
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss])
 
-        w = self._task_weights()
-        loss_total = torch.sum((w * loss))
+        loss_total = torch.sum(loss)
 
         self.log_dict(
             {
@@ -430,5 +418,4 @@ class MultiTaskEncoder(L.LightningModule):
             ,
             lr=self.lr
         )
-        opt_w = torch.optim.Adam([self.raw_w], lr=self.lr)
-        return [opt_model, opt_w]
+        return opt_model
