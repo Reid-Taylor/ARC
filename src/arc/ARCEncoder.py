@@ -290,12 +290,11 @@ class MultiTaskEncoder(L.LightningModule):
             conflicts = 0
             total_comparisons = 0
             
-            # Apply gradient surgery
             for i in range(num_tasks):
                 for j in torch.randperm(num_tasks):
                     if i != j:
                         g_i = projected_gradients[i]
-                        g_j = task_gradients[j.item()]  # Use original gradients for projection
+                        g_j = task_gradients[j.item()]
                         
                         dot_product = torch.dot(g_i, g_j)
                         norm_i = torch.norm(g_i, p=2)
@@ -310,7 +309,6 @@ class MultiTaskEncoder(L.LightningModule):
                                 projection = (dot_product / (norm_j ** 2)) * g_j
                                 projected_gradients[i] = g_i - projection
             
-            # Log conflict statistics
             if total_comparisons > 0:
                 global conflict_ratio
                 conflict_ratio = conflicts / total_comparisons

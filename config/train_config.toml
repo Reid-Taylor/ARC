@@ -25,7 +25,7 @@ isolate_color = {task_type = "task_sensitive", activation = "sigmoid"}
 dataset_path = "training"
 [training.encoder]
 batch_size = 1317
-epochs = 1000
+epochs = 10000
 [training.transformer]
 batch_size = 1
 epochs = 1
