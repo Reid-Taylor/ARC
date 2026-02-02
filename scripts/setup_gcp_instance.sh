@@ -20,8 +20,8 @@ git clone https://github.com/fchollet/ARC-AGI.git
 git clone https://github.com/arcprize/ARC-AGI-2.git
 cp -r ./ARC-AGI/data/training/ ./training/
 cp -r ./ARC-AGI/data/evaluation/ ./evaluation/
-cp -r ./ARC-AGI-2/data/training/ ./training/
-cp -r ./ARC-AGI-2/data/evaluation/ ./evaluation/
+cp -r ./ARC-AGI-2/data/training/* ./training/
+cp -r ./ARC-AGI-2/data/evaluation/* ./evaluation/
 rm -r -f ./ARC-AGI/
 rm -r -f ./ARC-AGI-2/
 cd .. 
