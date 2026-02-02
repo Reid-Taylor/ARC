@@ -27,5 +27,5 @@ dataset_path = "training"
 batch_size = 10
 epochs = 2
 [training.transformer]
-batch_size = 1
-epochs = 1
+batch_size = 10
+epochs = 2

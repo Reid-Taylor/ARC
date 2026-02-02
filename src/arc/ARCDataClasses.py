@@ -247,7 +247,7 @@ class ARCProblemSet:
             dataset:str='training'
             ):
         assert dataset in ['training', 'evaluation'], "Dataset must be one of 'training' or 'evaluation'."
-        data_dir = f"data/ARC-AGI/data/{dataset}/"
+        data_dir = f"data/{dataset}/"
         json_files = glob.glob(os.path.join(data_dir, "*.json"))
         all_data: list[ARCProblemSet] = []
         all_tensordicts: list[TensorDict] = []
@@ -269,8 +269,8 @@ class ARCProblemSet:
             for tag, key, grid in problem:
                 samples.append({
                     "name": problem.name,
-                    "padded_grid": grid.padded_grid.squeeze(0),  # shape: (30, 30)
-                    "encoded_grid": grid.padded_grid.squeeze(0) + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),  # shape: (30, 30)
+                    "padded_grid": grid.padded_grid.squeeze(0),
+                    "encoded_grid": grid.padded_grid.squeeze(0) + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),
                     "embedding": grid.embedding.squeeze(0) if grid.embedding is not None else None,
                     "meta": grid.meta,
                     "attributes": grid.attributes.squeeze(0) if grid.attributes is not None else None,

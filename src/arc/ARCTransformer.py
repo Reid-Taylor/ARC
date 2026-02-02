@@ -1,6 +1,6 @@
 from __future__ import annotations
 from beartype import beartype
-from beartype.typing import List
+from beartype.typing import Dict, List
 import lightning as L
 import torch
 from torch.nn import functional as F
@@ -12,8 +12,6 @@ from itertools import combinations
 @beartype
 class TransformationDescriber(L.LightningModule):
     """
-    This class should learn to predict the embeddings of an output grid given that of an output grid.
-
     We will use this opportunity to experiment with residual adapter modules, parameterized by a trainable function of the embedding itself, as the primary method of differentiation of the task.
 
     I hypothesize that by allowing the residual adapter to be a parameterization of a function of the embedding, we will achieve something similar to MAMBA-5. Assuming our list of learned-features in our embedding space is comprehensive of the information needed to describe the grid, we should see promising results.
@@ -45,9 +43,6 @@ class TransformationDescriber(L.LightningModule):
         self.lr: float = learning_rate
         self.alpha: float = alpha
 
-        self.register_buffer("L0", torch.zeros(self.num_tasks))
-        self.L0_initialized: bool = False
-
         self.automatic_optimization: bool = False
 
     def _get_parameters(self):
@@ -59,57 +54,38 @@ class TransformationDescriber(L.LightningModule):
         results = {
             "standard" : [],
             "backwards" : [],
-            "augmentation" : [],
             "identic" : []
         }
 
-        for idx in range(x['num_examples'].item()):
-            input_example: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['input']['embedding']
-            output_example: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['output']['embedding']
-            input_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['input']['augmented_grid_embedding']
-            output_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['output']['augmented_grid_embedding']
+        for idx in range(len(x['inputs'])):
+            input_example: Float[torch.Tensor, "1 D"] = x['inputs'][idx]
+            output_example: Float[torch.Tensor, "1 D"] = x['outputs'][idx]
 
-            transform_results = self.transformation_description(input_example, output_example, input_augmentation)
-            example_transformation_description = transform_results["transformation"]
-            example_random_description = transform_results["random"]
+            example_transformation_description = self.transformation_description(input_example, output_example)
 
-            backwards_results = self.transformation_description(output_example, input_example, output_augmentation)
-            example_backwards_transformation_description = backwards_results["transformation"]
-            example_backwards_random_description = backwards_results["random"]
+            example_backwards_transformation_description = self.transformation_description(output_example, input_example)
 
-            identic_input_results = self.transformation_description(input_example, input_example, output_augmentation)
-            identic_input_description = identic_input_results["transformation"]
+            identic_input_description = self.transformation_description(input_example, input_example)
             
-            identic_output_results = self.transformation_description(output_example, output_example, output_augmentation)
-            identic_output_description = identic_output_results["transformation"]
+            identic_output_description = self.transformation_description(output_example, output_example)
 
             results['standard'].append(example_transformation_description)
             results["backwards"].append(example_backwards_transformation_description)
-            results['augmentation'].extend([example_random_description,example_backwards_random_description])
             results["identic"].extend([identic_input_description,identic_output_description])
 
-        challenge_input: Float[torch.Tensor, "1 D"] = x['challenge']['embedding']
-        challenge_output: Float[torch.Tensor, "1 D"] = x['solution']['embedding']
-        input_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['input']['augmented_grid_embedding']
-        output_augmentation: Float[torch.Tensor, "1 D"] = x['examples'][f'example_{idx}']['output']['augmented_grid_embedding']
+        challenge_input: Float[torch.Tensor, "1 D"] = x['challenge']
+        challenge_output: Float[torch.Tensor, "1 D"] = x['solution']
 
-        challenge_transform_results = self.transformation_description(challenge_input, challenge_output, input_augmentation)
-        example_transformation_description = challenge_transform_results["transformation"]
-        example_random_description = challenge_transform_results["random"]
+        example_transformation_description = self.transformation_description(challenge_input, challenge_output)
 
-        challenge_backwards_results = self.transformation_description(challenge_output, challenge_input, output_augmentation)
-        example_backwards_transformation_description = challenge_backwards_results["transformation"]
-        example_backwards_random_description = challenge_backwards_results["random"]
+        example_backwards_transformation_description = self.transformation_description(challenge_output, challenge_input)
 
-        challenge_identic_input_results = self.transformation_description(challenge_input, challenge_input, output_augmentation)
-        identic_input_description = challenge_identic_input_results["transformation"]
+        identic_input_description = self.transformation_description(challenge_input, challenge_input)
         
-        challenge_identic_output_results = self.transformation_description(challenge_output, challenge_output, output_augmentation)
-        identic_output_description = challenge_identic_output_results["transformation"]
+        identic_output_description = self.transformation_description(challenge_output, challenge_output)
 
         results['standard'].append(example_transformation_description)
         results["backwards"].append(example_backwards_transformation_description)
-        results['augmentation'].extend([example_random_description,example_backwards_random_description])
         results["identic"].extend([identic_input_description,identic_output_description])
 
         return results
@@ -120,12 +96,11 @@ class TransformationDescriber(L.LightningModule):
         all_params = self._get_parameters()
         
         high_proximity_loss = 0
-        low_proximity_loss = 0
         opposite_task_loss = 0
         identic_loss = 0
 
         all_embeddings = []
-        for key in ['standard', 'backwards', 'augmentation']:
+        for key in ['standard', 'backwards']:
             all_embeddings.extend(results[key])
         all_embeddings = torch.stack(all_embeddings)
 
@@ -157,26 +132,6 @@ class TransformationDescriber(L.LightningModule):
                     ).mean()
                 )
 
-        for x in results['backwards']:
-            for y in results['augmentation']:
-                low_proximity_loss += (
-                    F.cosine_similarity(
-                        x, 
-                        y,
-                        dim=-1
-                    ).mean().abs()
-                )
-
-        for x in results['standard']:
-            for y in results['augmentation']:
-                low_proximity_loss += (
-                    F.cosine_similarity(
-                        x, 
-                        y,
-                        dim=-1
-                    ).mean().abs()
-                )
-
         for x in results['identic']:
             identic_loss += (
                 F.mse_loss(
@@ -185,69 +140,121 @@ class TransformationDescriber(L.LightningModule):
                 )
             )
 
+        entropy_density_loss = entropy_density_loss(all_embeddings)
+        variance_density_loss = variance_density_loss(all_embeddings)
+        anti_sparsity_loss = anti_sparsity_loss(all_embeddings)
+
         loss = torch.stack(
             [high_proximity_loss] + 
-            [low_proximity_loss] +
             [opposite_task_loss] +  
             [identic_loss] + 
             [
-                entropy_density_loss(all_embeddings),
-                variance_density_loss(all_embeddings), 
-                anti_sparsity_loss(all_embeddings)
+                entropy_density_loss,
+                variance_density_loss, 
+                anti_sparsity_loss
             ]
         )
 
-        # Initialize L0 if not already done
-        if (not self.L0_initialized):
-            self.L0[:] = loss.detach()
-            self.L0_initialized = True
-            L0_for_computation = loss.detach()
-        else:
-            L0_for_computation = self.L0
-
-        # Get task weights. Compute gradient norms for each task
-        GRADIENT_LIST = []
         loss_total = torch.sum(loss)
 
-        def _get_gradient(relevant_weighted_losses) -> List[torch.Tensor]:
-            gradients = torch.autograd.grad(relevant_weighted_losses, all_params, retain_graph=True, create_graph=True, allow_unused=True)
-            list_of_gradients = [g for g in gradients if g is not None]
-
-            if list_of_gradients:
-                return torch.norm(torch.stack([g.norm() for g in list_of_gradients]), 2)
-            return torch.tensor(0.0, device=loss.device, requires_grad=True)
-        
-        # Compute gradients per task
-        for i in range(self.num_tasks):
-            GRADIENT_LIST.append(
-                _get_gradient(
-                    loss[i]
+        def _get_task_gradients() -> Dict[int, torch.Tensor]:
+            task_gradients = {}
+            shared_params = all_params
+            
+            for task_idx in range(self.num_tasks):
+                opt_model.zero_grad()
+                
+                task_loss = loss[task_idx]
+                task_grads = torch.autograd.grad(
+                    task_loss, 
+                    shared_params, 
+                    retain_graph=True, 
+                    create_graph=False,
+                    allow_unused=True
                 )
-            )
-        
-        # Compute mean gradient norm
-        GRADIENT_TENSOR = torch.stack(GRADIENT_LIST)
-        AVERAGE_GRADIENT = GRADIENT_TENSOR.mean()
+                
+                flattened_grads = []
+                for grad in task_grads:
+                    if grad is not None:
+                        flattened_grads.append(grad.flatten())
+                    else:
+                        flattened_grads.append(torch.zeros(1, device=loss.device))
+                
+                task_gradients[task_idx] = torch.cat(flattened_grads)
+            
+            return task_gradients
 
-        loss_hat = (loss.detach() / (L0_for_computation + 1e-6))
-        loss_hat /= loss_hat.mean()
-        target_G = AVERAGE_GRADIENT.detach() * (loss_hat ** self.alpha)
-        
-        loss_grad = torch.sum(torch.abs(GRADIENT_TENSOR - target_G))
+        def _apply_pcgrad(task_gradients: Dict[int, torch.Tensor]) -> torch.Tensor:
+            """Apply PCGrad algorithm to resolve gradient conflicts."""
+            num_tasks = len(task_gradients)
+            projected_gradients = {i: task_gradients[i].clone() for i in range(num_tasks)}
+            
+            conflicts = 0
+            total_comparisons = 0
+            
+            for i in range(num_tasks):
+                for j in torch.randperm(num_tasks):
+                    if i != j:
+                        g_i = projected_gradients[i]
+                        g_j = task_gradients[j.item()]
+                        
+                        dot_product = torch.dot(g_i, g_j)
+                        norm_i = torch.norm(g_i, p=2)
+                        norm_j = torch.norm(g_j, p=2)
+                        
+                        total_comparisons += 1
+                        if norm_i > 0 and norm_j > 0:
+                            cosine_sim = dot_product / (norm_i * norm_j)
+                            
+                            if cosine_sim < 0:
+                                conflicts += 1
+                                projection = (dot_product / (norm_j ** 2)) * g_j
+                                projected_gradients[i] = g_i - projection
+            
+            if total_comparisons > 0:
+                global conflict_ratio
+                conflict_ratio = conflicts / total_comparisons
+            
+            final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
+            return final_gradient
 
-        # Update parameters
+        def _apply_gradients_to_params(final_gradient: torch.Tensor):
+            shared_params = all_params
+            param_shapes = [p.shape for p in shared_params]
+            param_sizes = [p.numel() for p in shared_params]
+            
+            start_idx = 0
+            for param, size, shape in zip(shared_params, param_sizes, param_shapes):
+                param_grad = final_gradient[start_idx:start_idx + size].reshape(shape)
+                param.grad = param_grad
+                start_idx += size
+
+        task_gradients = _get_task_gradients()
+        final_gradient = _apply_pcgrad(task_gradients)
+        
         opt_model.zero_grad()
-
-        loss_total.backward(retain_graph=True)
-        loss_grad.backward()
+        loss_total.backward()
+        
+        _apply_gradients_to_params(final_gradient)
+        
+        torch.nn.utils.clip_grad_norm_(
+            [p for params_list in all_params.values() if isinstance(params_list, list) for p in params_list] +
+            [p for params_dict in all_params.values() if isinstance(params_dict, dict) for params_list in params_dict.values() for p in params_list],
+            max_norm=1.0
+        )
 
         opt_model.step()
 
-        # Log metrics and updates
         self.log_dict(
             {
                 "train/total_loss": loss_total.detach(),
-                "train/loss_grad": loss_grad.detach(),
+                "train/high_proximity_loss": high_proximity_loss,
+                "train/opposite_task_loss": opposite_task_loss,  
+                "train/identic_loss": identic_loss, 
+                "train/entropy_density_loss": entropy_density_loss,
+                "train/variance_density_loss": variance_density_loss, 
+                "train/anti_sparsity_loss": anti_sparsity_loss,
+                "train/conflict_ratio": conflict_ratio
             },
             prog_bar=True
         )
