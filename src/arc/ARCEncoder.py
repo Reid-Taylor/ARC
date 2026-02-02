@@ -340,13 +340,13 @@ class MultiTaskEncoder(L.LightningModule):
 
         log_dict = {
             "train/total_loss": loss_total.detach(),
-            "train/reconstruction_loss": torch.exp(-1.0*reconstruction_loss.detach()),
-            "train/task_detection_loss": torch.exp(-1.0*torch.stack(task_sensitive_loss).detach().mean()) if task_sensitive_loss else torch.tensor(0.0),
-            "train/embedding_dissimilarity": variable_embedding_loss
+            "train/reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
+            "train/task_detection": torch.exp(-1.0*torch.stack(task_sensitive_loss).detach().mean()) if task_sensitive_loss else torch.tensor(0.0),
+            "train/embedding_dissimilarity_loss": variable_embedding_loss
         }
         
         for key, loss in zip(self.downstream_attributes,downstream_attribute_loss):
-            log_dict[f"train/attribute_prediction_{key}_loss"] = torch.exp(-1.0*loss)
+            log_dict[f"train/attribute_prediction_{key}"] = torch.exp(-1.0*loss)
         
         log_dict["train/conflict_ratio"] = conflict_ratio
         
