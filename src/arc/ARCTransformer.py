@@ -12,17 +12,13 @@ from itertools import combinations
 @beartype
 class TransformationDescriber(L.LightningModule):
     """
-    We will use this opportunity to experiment with residual adapter modules, parameterized by a trainable function of the embedding itself, as the primary method of differentiation of the task.
-
-    I hypothesize that by allowing the residual adapter to be a parameterization of a function of the embedding, we will achieve something similar to MAMBA-5. Assuming our list of learned-features in our embedding space is comprehensive of the information needed to describe the grid, we should see promising results.
+    We will use this opportunity to experiment with residual adapter modules, parameterized by a trainable function of the embedding itself, as the primary method of differentiation of the task. I hypothesize that by allowing the residual adapter to be a parameterization of a function of the embedding, we will achieve something similar to MAMBA-5. Assuming our list of learned-features in our embedding space is comprehensive of the information needed to describe the grid, we should see promising results.
 
     The base network should not be fit to any one example. We should have an end-goal network in which the network is trained to learn how to apply learnings from one grid to another. The learnings themselves of each examples unique transformations must be encapsulated wholly within the parameterization--the residual adapters. How can we achieve this?
 
     Enforce structure by asserting that the zero-vector of the parameterization corresponds to the identity function. Theoretically, this will force the base network to learn a generalizable mapping, while the adapters learn task-specific transformations.
 
-    Further, we should see that "eliminating" the adapters (setting them to zero) should yield a reasonable approximation of the input grid, given the input grid. This will be a good test of the generalizability of the base network.
-
-    Finally, we can train the network under the zero-vector adapter in a self-supervised task to enforce that the network exists only to apply a specified transformation. We might use augmentations of input grids as targets of this network, if we may learn the parameterization of these augmentation functions. (Perhaps this transition from the previous sentence to the following one is achieved through pre-training?) Then, the parameterization function must only be learned as a set of transformations describing the relationship between the challenge and solution grids.    
+    Further, we should see that "eliminating" the adapters (setting them to zero) should yield a reasonable approximation of the input grid, given the input grid. This will be a good test of the generalizability of the base network. For this, we can train the network under the zero-vector adapter in a self-supervised task to enforce that the network exists only to apply a specified transformation. We might use augmentations of input grids as targets of this network, if we may learn the parameterization of these augmentation functions. (Perhaps this transition from the previous sentence to the following one is achieved through pre-training?) Then, the parameterization function must only be learned as a set of transformations describing the relationship between the challenge and solution grids.
     """
     def __init__(
             self,
