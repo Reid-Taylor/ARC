@@ -53,6 +53,10 @@ def create_dataloader(config: Dict[str, Any]):
         scale_grid_augmentations = torch.stack([torch.tensor("scale_grid" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
         isolate_color_augmentations = torch.stack([torch.tensor("isolate_color" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
 
+        reflect_augmentations = torch.stack([torch.tensor("reflect" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
+        rotate_augmentations = torch.stack([torch.tensor("rotate" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
+        color_map_augmentations = torch.stack([torch.tensor("color_map" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
+
         padded_augmented_grids = torch.stack([item["padded_augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
         encoded_augmented_grids = torch.stack([item["encoded_augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
 
@@ -78,6 +82,10 @@ def create_dataloader(config: Dict[str, Any]):
                 "predicted_area": None,
                 "predicted_grid_size": None,
                 "predicted_num_colors": None,
+
+                "presence_reflect": reflect_augmentations,
+                "presence_rotate": rotate_augmentations,
+                "presence_color_map": color_map_augmentations,
 
                 "presence_roll": roll_augmentations,
                 "presence_scale_grid": scale_grid_augmentations,
@@ -126,16 +134,14 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
     contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
     learning_rate: float = config['model']['encoder']['learning_rate']
-    alpha: float = config['model']['encoder']['alpha']
-    
+
     model = MultiTaskEncoder(
         attribute_requirements=list(downstream_attributes_config.keys()),
         task_type={
-            key: contrastive_attributes_config[key]['task_type'] 
-            for key in contrastive_attributes_config.keys()
+            key: val['task_type'] 
+            for key, val in contrastive_attributes_config.items()
         },
         learning_rate=learning_rate,
-        alpha=alpha,
         tau=config['model']['encoder']['tau'],
         **{
             "Encoder": {
@@ -167,7 +173,6 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             "Attribute Predictor": {
                 key: {
                     "input_size": shared_model_config['latent_size'],
-                    "hidden_size": downstream_attributes_config[key]['hidden_size'],
                     "output_size": downstream_attributes_config[key]['output_size'],
                     "output_channels": downstream_attributes_config[key]['output_channels'],
                 } for key in downstream_attributes_config.keys()

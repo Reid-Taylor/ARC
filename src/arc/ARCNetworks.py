@@ -3,6 +3,7 @@ from beartype import beartype
 from jaxtyping import Float
 import torch
 from torch.nn import functional as F
+from functools import partial
 
 @beartype
 class FullyConnectedLayer(torch.nn.Module):
@@ -18,7 +19,7 @@ class FullyConnectedLayer(torch.nn.Module):
         if activation == 'relu':
             self.activation = F.relu
         elif activation == 'softmax':
-            self.activation = F.softmax
+            self.activation = partial(F.softmax, dim=-1)
         elif activation == 'sigmoid':
             self.activation = F.sigmoid
         elif activation == "identity":
@@ -86,25 +87,12 @@ class AttributeHead(torch.nn.Module):
         self.channels = output_channels
         self.layer1 = FullyConnectedLayer(
             input_size=input_size,
-            output_size=hidden_size
-        )
-        self.layer2 = FullyConnectedLayer(
-            input_size=hidden_size,
             output_size=output_size*output_channels
         )
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
         x = self.layer1(x)
-        x = self.layer2(x)
         return x
-
-@beartype
-class ColorMap(torch.nn.Module):
-    def __init__(self):
-        pass
-
-    def forward(self, x:torch.Tensor) -> torch.Tensor:
-        pass
 
 @beartype
 class Encoder(torch.nn.Module):

@@ -79,6 +79,7 @@ class MultiTaskEncoder(L.LightningModule):
         )
 
         self.task_sensitives: list[str] = []
+        self.task_agnostics: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
 
         for key, value in task_type.items():
@@ -92,6 +93,8 @@ class MultiTaskEncoder(L.LightningModule):
                     in_keys=["online_representation"],
                     out_keys=[f"predicted_presence_{key}"]
                 ))
+            elif value =="task_insensitive":
+                self.task_agnostics.append(key)
             else: 
                 raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
@@ -105,7 +108,7 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + 1
+        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_agnostics) + 1
         # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + embedding dissimilarity
         
         self.lr: float = learning_rate
@@ -235,12 +238,26 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
 
+        task_invariant_loss = []
+        for key in self.task_agnostics:
+            weights = batch[f'presence_{key}'].expand_as(results['standard']["predicted_target_representation"])
+            if weights.sum()>0:
+                task_invariant_loss.append(
+                    F.mse_loss(
+                        results['standard']["predicted_target_representation"], 
+                        results['standard']["target_representation"], 
+                        weight=weights
+                    )
+                )
+            else: 
+                task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
+
         variable_embedding_loss = 0.0
         for loss_function in [partial(anti_sparsity_loss, threshold=0.5, lambda_sparse=0.1)]:
             variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
             variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
         
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss])
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         loss_total = torch.sum(loss)
         
@@ -342,6 +359,7 @@ class MultiTaskEncoder(L.LightningModule):
             "train/total_loss": loss_total.detach(),
             "train/reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
             "train/task_detection": torch.exp(-1.0*torch.stack(task_sensitive_loss).detach().mean()) if task_sensitive_loss else torch.tensor(0.0),
+            "train/task_ignorance": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
             "train/embedding_dissimilarity_loss": variable_embedding_loss
         }
         
@@ -386,13 +404,27 @@ class MultiTaskEncoder(L.LightningModule):
                     batch[f"presence_{key}"]
                 )
             )
-        
+
+        task_invariant_loss = []
+        for key in self.task_agnostics:
+            weights = batch[f'presence_{key}'].expand_as(results['standard']["predicted_target_representation"])
+            if weights.sum()>0:
+                task_invariant_loss.append(
+                    F.mse_loss(
+                        results['standard']["predicted_target_representation"], 
+                        results['standard']["target_representation"], 
+                        weight=weights
+                    )
+                )
+            else: 
+                task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
+
         variable_embedding_loss = 0.0
         for loss_function in [partial(anti_sparsity_loss, threshold=0.5, lambda_sparse=0.1)]:
             variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
             variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
         
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss])
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         loss_total = torch.sum(loss)
 

@@ -23,11 +23,11 @@ class AugmentationConfig:
     num_augmentations: int = None
     augmentation_set: list[str]
     def __init__(self) -> None:
-        self.num_augmentations = torch.randint(1, 6, (1,)).item()
+        self.num_augmentations = 1
         self.augmentation_set: list[str] = self._augmentation_set()
 
     def _augmentation_set(self) -> list[str]:
-        return sample(AUGMENTATIONS, counts=[10] * len(AUGMENTATIONS),k=self.num_augmentations)
+        return sample(AUGMENTATIONS, k=self.num_augmentations)
         
     def __str__(self) -> str:
         return f"AugmentationConfig(num_augmentations={len(self.augmentation_set)}) of [{', '.join(self.augmentation_set)}]"
@@ -75,7 +75,6 @@ class ARCGrid:
     meta: Optional[ARCGridMeta]=None
     attributes: Optional[Int[torch.Tensor, "1 _"]] = None
     embedding: Optional[Float[torch.Tensor, "1 D"]] = None
-    augmented_grid_embedding: Optional[Float[torch.Tensor, "1 D"]] = None
     """
     The ARC Grid represents a bit array which outlines either an input or an output grid. We use base tensor for these bit arrays, and provide helper methods which power preprocessing for each layer of the ARC network. 
     """
@@ -103,12 +102,9 @@ class ARCGrid:
 
         self.attributes: Int[torch.Tensor, "1 _"] = self.meta._to_tensor()
 
-        self.embedding:Optional[Float[torch.Tensor, "1 D"]] = None
-        self.augmented_grid_embedding= None
-
     def to_tensordict(self) -> TensorDict:
         return TensorDict({
-            "grid_embedding": self.embedding if self.embedding is not None else torch.randn(1, 64),
+            "grid_embedding": torch.randn(1, 64),
             "grid": self.padded_grid.to(torch.float32),
             "augmented_grid": self.padded_augmented_grid.to(torch.float32),
             "predicted_grid": None,
@@ -122,6 +118,10 @@ class ARCGrid:
             "predicted_grid_size": None,
             "predicted_num_colors": None,
             "predicted_color_map": None,
+
+            "presence_reflect": torch.tensor(["reflect" in self.augmentation_config.augmentation_set], dtype=torch.bool),
+            "presence_rotate": torch.tensor(["rotate" in self.augmentation_config.augmentation_set], dtype=torch.bool),
+            "presence_color_map": torch.tensor(["color_map" in self.augmentation_config.augmentation_set], dtype=torch.bool),
 
             "presence_roll": torch.tensor(["roll" in self.augmentation_config.augmentation_set], dtype=torch.bool),
             "presence_scale_grid": torch.tensor(["scale_grid" in self.augmentation_config.augmentation_set], dtype=torch.bool),
@@ -166,9 +166,10 @@ class ARCGrid:
         new_grid = torch.roll(
             original_grid, 
             shifts=(
-                torch.randint(0, original_grid.shape[-2], (1,)).item(), torch.randint(0, original_grid.shape[-1], (1,)).item()
+                torch.randint(0, original_grid.shape[-2], (1,)).item(), 
+                torch.randint(0, original_grid.shape[-1], (1,)).item()
             ), 
-            dims=(1,2)
+            dims=(-2,-1)
         )
 
         self.augmented_grid = new_grid.detach().clone()
@@ -271,10 +272,10 @@ class ARCProblemSet:
                     "name": problem.name,
                     "padded_grid": grid.padded_grid.squeeze(0),
                     "encoded_grid": grid.padded_grid.squeeze(0) + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),
-                    "embedding": grid.embedding.squeeze(0) if grid.embedding is not None else None,
+                    "embedding": None,
                     "meta": grid.meta,
                     "attributes": grid.attributes.squeeze(0) if grid.attributes is not None else None,
-                    "augmentation_set": grid.augmentation_config,
+                    "augmentation_set": grid.augmentation_config.augmentation_set,
                     "padded_augmented_grid": grid.padded_augmented_grid,
                     "encoded_augmented_grid": grid.padded_augmented_grid + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),
                 })
