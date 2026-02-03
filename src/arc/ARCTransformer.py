@@ -38,7 +38,7 @@ class TransformationDescriber(L.LightningModule):
             **network_dimensions["TransformationDescriber"]
         )
 
-        self.num_tasks = 7
+        self.num_tasks = 4
         
         self.lr: float = learning_rate
         self.alpha: float = alpha
@@ -57,9 +57,9 @@ class TransformationDescriber(L.LightningModule):
             "identic" : []
         }
 
-        for idx in range(len(x['inputs'])):
-            input_example: Float[torch.Tensor, "1 D"] = x['inputs'][idx]
-            output_example: Float[torch.Tensor, "1 D"] = x['outputs'][idx]
+        for idx in range(x['inputs'].shape[-1]):
+            input_example: Float[torch.Tensor, "1 D"] = x['inputs'][:,:,idx]
+            output_example: Float[torch.Tensor, "1 D"] = x['outputs'][:,:,idx]
 
             example_transformation_description = self.transformation_description(input_example, output_example)
 
@@ -140,19 +140,13 @@ class TransformationDescriber(L.LightningModule):
                 )
             )
 
-        entropy_density_loss = entropy_density_loss(all_embeddings)
-        variance_density_loss = variance_density_loss(all_embeddings)
-        anti_sparsity_loss = anti_sparsity_loss(all_embeddings)
+        anti_sparsity_loss_value = anti_sparsity_loss(all_embeddings)
 
         loss = torch.stack(
             [high_proximity_loss] + 
             [opposite_task_loss] +  
             [identic_loss] + 
-            [
-                entropy_density_loss,
-                variance_density_loss, 
-                anti_sparsity_loss
-            ]
+            [anti_sparsity_loss_value]
         )
 
         loss_total = torch.sum(loss)
@@ -238,8 +232,7 @@ class TransformationDescriber(L.LightningModule):
         _apply_gradients_to_params(final_gradient)
         
         torch.nn.utils.clip_grad_norm_(
-            [p for params_list in all_params.values() if isinstance(params_list, list) for p in params_list] +
-            [p for params_dict in all_params.values() if isinstance(params_dict, dict) for params_list in params_dict.values() for p in params_list],
+            all_params,
             max_norm=1.0
         )
 
@@ -251,14 +244,15 @@ class TransformationDescriber(L.LightningModule):
                 "train/high_proximity_loss": high_proximity_loss,
                 "train/opposite_task_loss": opposite_task_loss,  
                 "train/identic_loss": identic_loss, 
-                "train/entropy_density_loss": entropy_density_loss,
-                "train/variance_density_loss": variance_density_loss, 
-                "train/anti_sparsity_loss": anti_sparsity_loss,
+                "train/anti_sparsity_loss": anti_sparsity_loss_value,
                 "train/conflict_ratio": conflict_ratio
             },
             prog_bar=True
         )
 
+    def validation_step(self, batch, batch_idx):
+        pass
+    
     def configure_optimizers(self):
         params = self._get_parameters()
 

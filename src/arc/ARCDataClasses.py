@@ -104,7 +104,7 @@ class ARCGrid:
 
     def to_tensordict(self) -> TensorDict:
         return TensorDict({
-            "grid_embedding": torch.randn(1, 64),
+            "grid_embedding": torch.randn(1, 32),
             "grid": self.padded_grid.to(torch.float32),
             "augmented_grid": self.padded_augmented_grid.to(torch.float32),
             "predicted_grid": None,

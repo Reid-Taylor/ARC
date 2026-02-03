@@ -45,15 +45,15 @@ local-test-encoder:
 	python scripts/train_encoder.py \
 		--config test_config \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test \
-		--log-path ./logs/test
+		--model-save-path ./models/test/tmp \
+		--log-path ./logs/test/tmp
 
 local-test-transformer:
 	@echo "Running local test of ARC Encoder training..."
 	python scripts/train_transformer.py \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test \
-		--log-path ./logs/test
+		--model-save-path ./models/test/tmp \
+		--log-path ./logs/test/tmp
 
 view-training:
 	tensorboard --logdir logs/test

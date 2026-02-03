@@ -31,13 +31,14 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config
 from src.arc.ARCDataClasses import ARCProblemSet
-from src.arc.ARCEncoder import MultiTaskEncoder
+from src.arc.ARCTransformer import TransformationDescriber
 
 
 def create_dataloader(config: Dict[str, Any]):
-    encoder_config = config['model']['transformer']
     dataset_path:str = config['training']['shared']['dataset_path']
     batch_size:int = config['training']['transformer']['batch_size']
+    latent_size:int = config['model']['shared']['latent_size']
+    max_num_examples:int = 3
     
     all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_tensordicts']
     num_samples = len(all_grids)
@@ -45,10 +46,18 @@ def create_dataloader(config: Dict[str, Any]):
     def collate_fn(batch):
         names = [item["problem_name"] for item in batch]
 
-        inputs = [[value['input'] for key,value in item['examples'].items()] for item in batch]
-        outputs = [[value['output'] for key,value in item['examples'].items()] for item in batch]
-        challenge = [item['challenge'] for item in batch]
-        solution = [item['solution'] for item in batch]
+        inputs = torch.zeros(len(batch),latent_size,max_num_examples) #Lets reduce down to only consider the N = 3 per problem state for now, we can repair this assumption witt full padding, or other advanced handling via tensordicts at a later time when I have time to better familiarize myself with TensorDict as a whole.
+        outputs = torch.zeros(len(batch),latent_size,max_num_examples)
+
+        for batch_idx, item in enumerate(batch):
+            examples_list = list(item['examples'].values())
+            num_examples = len(examples_list)
+            for idx in range(min(num_examples,3)):
+                inputs[batch_idx, :, idx] = examples_list[idx]['input']['grid_embedding']
+                outputs[batch_idx, :, idx] = examples_list[idx]['output']['grid_embedding']
+
+        challenge = torch.cat([item['challenge']['grid_embedding'] for item in batch])
+        solution = torch.cat([item['solution']['grid_embedding'] for item in batch])
 
         return TensorDict(
             {
@@ -66,7 +75,6 @@ def create_dataloader(config: Dict[str, Any]):
             device=get_device()
         )
     
-    # Create dataloader
     train_dataloader = torch.utils.data.DataLoader(
         all_grids[:int(0.9*num_samples)],
         batch_size=batch_size,
@@ -75,7 +83,6 @@ def create_dataloader(config: Dict[str, Any]):
         num_workers=2 if torch.cuda.is_available() else 0,
         pin_memory=(get_device().type=="cuda")
     )
-    # Create dataloader
     val_dataloader = torch.utils.data.DataLoader(
         all_grids[int(0.9*num_samples):],
         batch_size=batch_size,
@@ -88,58 +95,19 @@ def create_dataloader(config: Dict[str, Any]):
     return train_dataloader, val_dataloader
 
 
-def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
+def create_model(config: Dict[str, Any]) -> TransformationDescriber:
     """Create and initialize the model."""
-    encoder_config = config['model']['encoder']
-    downstream_attributes_config = config['model']['encoder']['downstream_attributes']
-    contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
-    learning_rate: float = config['model']['encoder']['learning_rate']
-    alpha: float = config['model']['encoder']['alpha']
+    learning_rate: float = config['model']['transformer']['learning_rate']
+    alpha: float = config['model']['transformer']['alpha']
     
-    model = MultiTaskEncoder(
-        attribute_requirements=list(downstream_attributes_config.keys()),
-        task_type={
-            key: contrastive_attributes_config[key]['task_type'] 
-            for key in contrastive_attributes_config.keys()
-        },
+    model = TransformationDescriber(
         learning_rate=learning_rate,
         alpha=alpha,
-        tau=config['model']['encoder']['tau'],
         **{
-            "Encoder": {
-                "input_size": encoder_config['grid_size'],
-                "attention_sizes": encoder_config['attention_sizes'],
-                "output_size": shared_model_config['latent_size']
-            },
-            "Decoder": {
+            "TransformationDescriber": {
                 "input_size": shared_model_config['latent_size'],
-                "hidden_sizes": encoder_config['hidden_sizes'],
-                "output_size": encoder_config['grid_size']
-            },
-            "Contrastive Projection": {
-                "input_size": shared_model_config['latent_size'],
-                "output_size": shared_model_config['latent_size']
-            },
-            "Contrastive Predictor": {
-                "input_size": shared_model_config['latent_size'],
-                "output_size": shared_model_config['latent_size'],
-                "activation": "identity"
-            },
-            "Attribute Detector": {
-                key: {
-                    "input_size": shared_model_config['latent_size'],
-                    "output_size": 1,
-                    "activation": contrastive_attributes_config[key].get('activation', "sigmoid")
-                } for key in contrastive_attributes_config.keys() 
-            },
-            "Attribute Predictor": {
-                key: {
-                    "input_size": shared_model_config['latent_size'],
-                    "hidden_size": downstream_attributes_config[key]['hidden_size'],
-                    "output_size": downstream_attributes_config[key]['output_size'],
-                    "output_channels": downstream_attributes_config[key]['output_channels'],
-                } for key in downstream_attributes_config.keys()
+                "output_size": shared_model_config['transformation_dimension_size']
             },
         }
     ).to(get_device())
@@ -155,11 +123,9 @@ def setup_trainer(
 ) -> L.Trainer:
     """Setup Lightning trainer with callbacks and logger."""
     
-    # Create directories if they don't exist
     os.makedirs(model_save_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)
     
-    # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
         dirpath=model_save_path,
         filename="arc_encoder_{epoch:02d}_{val_loss:.2f}",
@@ -175,18 +141,15 @@ def setup_trainer(
         mode="min"
     )
     
-    # Setup logger
     logger = TensorBoardLogger(
         save_dir=log_path,
         name="arc_encoder",
         version=f"train_{torch.randint(0, 10000, (1,)).item()}"
     )
     
-    # Determine accelerator
     accelerator = "gpu" if use_gpu and torch.cuda.is_available() else "cpu"
     devices = 1 if accelerator == "gpu" else "auto"
     
-    # Initialize trainer
     trainer = L.Trainer(
         max_epochs=epochs,
         callbacks=[checkpoint_callback, early_stopping],
@@ -215,7 +178,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Load configuration
     if args.config:
         config = load_config(args.config)
     else:
@@ -226,17 +188,14 @@ def main():
     print(f"  Model save path: {args.model_save_path}")
     print(f"  Using GPU: {not args.no_gpu and torch.cuda.is_available()}")
     
-    # Create dataloader
     print("Loading dataset...")
     train_dataloader, val_dataloaders = create_dataloader(config)
     print(f"Dataset loaded with {len(train_dataloader)} batches")
     
-    # Create model
     print("Initializing model...")
     model = create_model(config)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
-    # Setup trainer
     print("Setting up trainer...")
     trainer = setup_trainer(
         config['training']['encoder']['epochs'],
@@ -245,11 +204,9 @@ def main():
         use_gpu=not args.no_gpu
     )
     
-    # Train model
     print("Starting training...")
     trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloaders)
     
-    # Save training metrics
     if args.output_metrics:
         metrics = {
             "best_checkpoint": trainer.checkpoint_callback.best_model_path,

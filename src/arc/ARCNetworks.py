@@ -177,43 +177,23 @@ class TransformationSpaceProjection(torch.nn.Module):
 
         self.final_map = torch.nn.Linear(input_size * 2, output_size)
 
-    def forward(self, input_embedding:torch.Tensor, output_embedding:torch.Tensor, random_augmentation:torch.Tensor):
+    def forward(self, input_embedding:torch.Tensor, output_embedding:torch.Tensor):
+        input_as_query = F.softmax(self.reading_example_input(input_embedding), dim=-1)
+        output_as_query = F.softmax(self.reading_example_output(output_embedding), dim=-1)
 
+        input_concatenated = torch.cat((input_embedding, output_embedding), dim=-1).squeeze(dim=0)
+        input_concatenated_mapped = F.softmax(self.concatenated_layer_map(input_concatenated), dim=-1)
 
-        def forward_march(x, y):
-            input_as_query = F.softmax(self.reading_example_input(x), dim=-1).squeeze(dim=0)
-            output_as_query = F.softmax(self.reading_example_output(y), dim=-1).squeeze(dim=0)
+        input_query_key = torch.matmul(input_as_query.transpose(-2,-1), input_concatenated_mapped)
+        output_query_key = torch.matmul(output_as_query.transpose(-2,-1), input_concatenated_mapped)
 
-            input_concatenated = torch.cat((x, y), dim=-1).squeeze(dim=0)
-            input_concatenated_mapped = F.softmax(self.concatenated_layer_map(input_concatenated), dim=-1)
+        meta_attended = F.relu(torch.matmul(input_query_key, output_query_key.transpose(-2,-1)))
 
-            input_query_key = torch.matmul(input_as_query.transpose(-2,-1), input_concatenated_mapped)
-            output_query_key = torch.matmul(output_as_query.transpose(-2,-1), input_concatenated_mapped)
+        d_k = input_concatenated_mapped.size()[-1]
+        d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=input_concatenated_mapped.device)
 
-            meta_attended = F.relu(torch.matmul(input_query_key, output_query_key.transpose(-2,-1)))
+        result = torch.matmul(input_concatenated_mapped, meta_attended) / torch.sqrt(d_k_tensor)
 
-            d_k = input_concatenated_mapped.size()[-1]
-            d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=input_concatenated_mapped.device)
+        result = torch.relu(self.final_map(result))
 
-            result = torch.matmul(input_concatenated_mapped, meta_attended) / torch.sqrt(d_k_tensor)
-
-            result = torch.relu(self.final_map(result))
-
-            return result
-        
-        transformation_description = forward_march(
-            input_embedding, 
-            output_embedding
-        )
-
-        random_description = forward_march(
-            input_embedding, 
-            random_augmentation
-        )
-        
-        results = {
-            "transformation": transformation_description, 
-            "random" : random_description
-        }
-
-        return results
+        return result
