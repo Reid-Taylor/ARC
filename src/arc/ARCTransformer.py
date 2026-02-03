@@ -141,6 +141,7 @@ class TransformationDescriber(L.LightningModule):
             )
 
         anti_sparsity_loss_value = anti_sparsity_loss(all_embeddings)
+        #TODO either redefine the other util losses to create ranges of [0, np.inf], or remove them from the code base...
 
         loss = torch.stack(
             [high_proximity_loss] + 
@@ -251,7 +252,71 @@ class TransformationDescriber(L.LightningModule):
         )
 
     def validation_step(self, batch, batch_idx):
-        pass
+        results = self.forward(batch)
+        
+        high_proximity_loss = 0
+        opposite_task_loss = 0
+        identic_loss = 0
+
+        all_embeddings = []
+        for key in ['standard', 'backwards']:
+            all_embeddings.extend(results[key])
+        all_embeddings = torch.stack(all_embeddings)
+
+        for x,y in combinations(results['standard'], 2):
+            high_proximity_loss += (
+                1 - F.cosine_similarity(
+                    x, 
+                    y,
+                    dim=-1
+                ).mean()
+            )
+
+        for x,y in combinations(results['backwards'], 2):
+            high_proximity_loss += (
+                1 - F.cosine_similarity(
+                    x, 
+                    y,
+                    dim=-1
+                ).mean()
+            )
+        
+        for x in results['standard']:
+            for y in results['backwards']:
+                opposite_task_loss += (
+                    1 + F.cosine_similarity(
+                        x, 
+                        y,
+                        dim=-1
+                    ).mean()
+                )
+
+        for x in results['identic']:
+            identic_loss += (
+                F.mse_loss(
+                    x,
+                    torch.zeros_like(x)
+                )
+            )
+
+        anti_sparsity_loss_value = anti_sparsity_loss(all_embeddings)
+
+        loss = torch.stack(
+            [high_proximity_loss] + 
+            [opposite_task_loss] +  
+            [identic_loss] + 
+            [anti_sparsity_loss_value]
+        )
+
+        loss_total = torch.sum(loss)
+
+        self.log_dict(
+            {
+                "val/val_loss": loss_total.detach(),
+            },
+            prog_bar=True
+        )
+
     
     def configure_optimizers(self):
         params = self._get_parameters()

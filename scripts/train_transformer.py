@@ -75,6 +75,8 @@ def create_dataloader(config: Dict[str, Any]):
             device=get_device()
         )
     
+        #TODO Revamp the load tensordict to pull all embeddings, and other required information from the latest saved model's inference over the latest saved models' train and val sets, respectively
+    
     train_dataloader = torch.utils.data.DataLoader(
         all_grids[:int(0.9*num_samples)],
         batch_size=batch_size,
