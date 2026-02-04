@@ -146,19 +146,31 @@ class Decoder(torch.nn.Module):
 
         hidden_dims, hidden_layers = hidden_sizes
 
-        self.fully_connected = FullyConnectedLayer(input_size=input_size, output_size=hidden_dims)
+        self.linear_maps = [FullyConnectedLayer(input_size=input_size, output_size=input_size) for _ in range(hidden_layers)]
 
-        self.hidden_layers = [FullyConnectedLayer(input_size=hidden_dims, output_size=hidden_dims) for _ in range(hidden_layers)]
-        
-        self.fc_out = FullyConnectedLayer(input_size=hidden_dims, output_size=output_size * 11)
+        self.hidden_layers = [SelfAttentionHead(input_dim=input_size, head_dim=hidden_dims, output_dim=hidden_dims) for _ in range(hidden_layers)]
+
+        """
+        After creating this decoder module, how could we architect the weights such that the layers are shared, or influenced, by each other to minimize weights trainable, as well as compute necessary.
+        """
+
+        self.fc_out = FullyConnectedLayer(input_size=hidden_dims*hidden_layers, output_size=output_size * 11)
     
     def forward(self, x) -> Float[torch.Tensor, "B 900 11"]:
-        x = self.fully_connected(x)
+        attended_list = []
 
-        for layer in self.hidden_layers:
-            x = layer(x)
+        for idx in range(len(self.hidden_layers)):
+            x_1 = self.linear_maps[idx](x)
+            attended_list.append(
+                self.hidden_layers[idx](
+                    global_view=x, 
+                    local_view=x_1
+                )
+            )
 
-        logits = self.fc_out(x)
+        attended = torch.cat(attended_list,dim=-1)
+
+        logits = self.fc_out(attended)
 
         return logits.view(-1, 900, 11)
     
