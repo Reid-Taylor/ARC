@@ -146,9 +146,11 @@ class Decoder(torch.nn.Module):
 
         hidden_dims, hidden_layers = hidden_sizes
 
-        self.linear_maps = [FullyConnectedLayer(input_size=input_size, output_size=input_size) for _ in range(hidden_layers)]
+        self.linear_maps = [FullyConnectedLayer(input_size=input_size, output_size=hidden_dims) for _ in range(hidden_layers)]
 
-        self.hidden_layers = [SelfAttentionHead(input_dim=input_size, head_dim=hidden_dims, output_dim=hidden_dims) for _ in range(hidden_layers)]
+        self.encoding_map = FullyConnectedLayer(input_size=input_size, output_size=hidden_dims)
+
+        self.hidden_layers = [SelfAttentionHead(input_dim=hidden_dims, head_dim=hidden_dims, output_dim=hidden_dims) for _ in range(hidden_layers)]
 
         """
         After creating this decoder module, how could we architect the weights such that the layers are shared, or influenced, by each other to minimize weights trainable, as well as compute necessary.
@@ -159,11 +161,13 @@ class Decoder(torch.nn.Module):
     def forward(self, x) -> Float[torch.Tensor, "B 900 11"]:
         attended_list = []
 
+        x_mapped = self.encoding_map(x)
+
         for idx in range(len(self.hidden_layers)):
             x_1 = self.linear_maps[idx](x)
             attended_list.append(
                 self.hidden_layers[idx](
-                    global_view=x, 
+                    global_view=x_mapped, 
                     local_view=x_1
                 )
             )

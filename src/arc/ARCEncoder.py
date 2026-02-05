@@ -108,6 +108,8 @@ class MultiTaskEncoder(L.LightningModule):
                 out_keys=[f"predicted_{key}"]
             ))
 
+        self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
+
         self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_agnostics) + 1
         # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + embedding dissimilarity
         
@@ -356,17 +358,17 @@ class MultiTaskEncoder(L.LightningModule):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
 
         log_dict = {
-            "train/total_loss": loss_total.detach(),
-            "train/reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
-            "train/task_detection": torch.exp(-1.0*torch.stack(task_sensitive_loss).detach().mean()) if task_sensitive_loss else torch.tensor(0.0),
-            "train/task_ignorance": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
-            "train/embedding_dissimilarity_loss": variable_embedding_loss
+            "train/Total Loss": loss_total.detach(),
+            "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach()),
+            "train/P(Detection)": torch.exp(-1.0*torch.stack(task_sensitive_loss).detach().mean()) if task_sensitive_loss else torch.tensor(0.0),
+            "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
+            "train/Anti Sparsity Loss": variable_embedding_loss
         }
         
         for key, loss in zip(self.downstream_attributes,downstream_attribute_loss):
-            log_dict[f"train/attribute_prediction_{key}"] = torch.exp(-1.0*loss)
+            log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss)
         
-        log_dict["train/conflict_ratio"] = conflict_ratio
+        log_dict["train/Surgery Ratio"] = conflict_ratio
         
         self.log_dict(log_dict, prog_bar=True)
 
