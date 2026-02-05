@@ -255,7 +255,7 @@ class MultiTaskEncoder(L.LightningModule):
                 task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
 
         variable_embedding_loss = 0.0
-        for loss_function in [partial(anti_sparsity_loss, threshold=0.5, lambda_sparse=0.1)]:
+        for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
             variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
             variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
         
