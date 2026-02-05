@@ -211,7 +211,7 @@ class MultiTaskEncoder(L.LightningModule):
         pred_standard = results['standard']["predicted_grid"].view(-1, 11)
         pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
         
-        targets = batch['encoded_grid'].long().view(-1)
+        targets = batch['padded_grid'].long().view(-1)
         
         reconstruction_loss = 0.5 * (
             F.cross_entropy(pred_standard, targets) 
@@ -378,7 +378,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         pred_standard = results['standard']["predicted_grid"].view(-1, 11)
         pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
-        targets = batch['encoded_grid'].long().view(-1)
+        targets = batch['padded_grid'].long().view(-1)
         
         reconstruction_loss = 0.5 * \
             (F.cross_entropy(pred_standard, targets) 
