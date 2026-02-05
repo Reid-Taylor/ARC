@@ -106,6 +106,8 @@ class Encoder(torch.nn.Module):
 
         self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(10)]
 
+        self.dropout = torch.nn.Dropout(0.125)
+
         self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size-10)
 
     def forward(self, encoded_grid, padded_grid) -> Float[torch.Tensor, "B D"]:
@@ -131,7 +133,9 @@ class Encoder(torch.nn.Module):
         
         attended_layers = torch.cat(the_attended, dim=-1)
 
-        final_layer = self.fc_out(attended_layers)
+        attended_dropout = self.dropout(attended_layers)
+
+        final_layer = self.fc_out(attended_dropout)
 
         masks_tensor = torch.stack(masks,dim=-1)
         return torch.cat([final_layer, masks_tensor], dim=-1)
