@@ -31,29 +31,6 @@ class FullyConnectedLayer(torch.nn.Module):
         return self.activation(self.fc1(x))
 
 @beartype
-class AttentionHead(torch.nn.Module):
-    """
-    Naive implementation of a self-attention head.
-    """
-    def __init__(self, input_dim:int, head_dim:int, output_dim:int):
-        super().__init__()
-        self.keys = torch.nn.Linear(input_dim, head_dim)
-        self.queries = torch.nn.Linear(input_dim, head_dim)
-        self.values = torch.nn.Linear(input_dim, output_dim)
-
-    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B T"]:
-        keys = F.relu(self.keys(x))
-        queries = F.relu(self.queries(x))
-        values = F.relu(self.values(x))
-
-        d_k = keys.size()[-1]
-        d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=keys.device)
-        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(d_k_tensor)
-        attention_weights = F.softmax(scores, dim=-1)
-        attended_values = torch.matmul(attention_weights, values)
-        return attended_values
-    
-@beartype
 class SelfAttentionHead(torch.nn.Module):
     """
     Naive implementation of a self-attention head.
@@ -81,18 +58,104 @@ class AttributeHead(torch.nn.Module):
     """
     A network which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str, input_size:int=64, hidden_size:int=32, output_size:int=10, output_channels:int=11):
+    def __init__(self, name:str, input_size:int=64, hidden_sizes:list[int]=[32,4], output_sizes:list[int]=[10,11]):
         super().__init__()
+
+        hidden_dim, hidden_layers = hidden_sizes
+        output_dim, output_channels = output_sizes
+
         self.name = name
         self.channels = output_channels
-        self.layer1 = FullyConnectedLayer(
+
+        self.fc_in = FullyConnectedLayer(
+            name,
             input_size=input_size,
-            output_size=output_size*output_channels
+            output_size=input_size
+        )
+
+        self.attention_layers = [
+            SelfAttentionHead(input_size, hidden_dim, int(output_dim/2))
+            for _ in range(hidden_layers)
+        ]
+
+        self.fc_out = FullyConnectedLayer(
+            name,
+            input_size=int(output_dim/2)*hidden_layers,
+            output_size=output_dim*output_channels
         )
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
-        x = self.layer1(x)
-        return x
+        the_attended=[]
+
+        for i in range(len(self.attention_layers)):
+            the_attended.append(
+                self.attention_layers[i](
+                    global_view= self.fc_in(x),
+                    local_view=x
+                )
+            )
+
+        attended_layers = torch.cat(the_attended, dim=-1)
+
+        final_layer = self.fc_out(attended_layers)
+
+        return final_layer
+    
+@beartype
+class DetectionHead(torch.nn.Module):
+    def __init__(self, name:str, input_size:int=64, hidden_sizes:list[int]=[32,4], output_dim:int=1):
+        super().__init__()
+
+        hidden_dim, hidden_layers = hidden_sizes
+
+        self.name = name
+
+        self.fc_in = FullyConnectedLayer(
+            name,
+            input_size=input_size,
+            output_size=input_size
+        )
+
+        self.fc_global = FullyConnectedLayer(
+            name, 
+            input_size=input_size*2,
+            output_size=input_size
+        )
+
+        self.attention_layers = [
+            SelfAttentionHead(input_size, hidden_dim, output_dim)
+            for _ in range(hidden_layers)
+        ]
+
+        self.fc_out = FullyConnectedLayer(
+            name,
+            input_size=output_dim*hidden_layers,
+            output_size=output_dim,
+            activation='sigmoid'
+        )
+
+
+    def forward(self, original:torch.Tensor, augmentation:torch.Tensor) -> Float[torch.Tensor, "B 1"]:
+        fc_original = self.fc_in(original)
+        fc_augmentation = self.fc_in(augmentation)
+
+        global_input = self.fc_global(torch.cat([original, augmentation], dim=-1))
+
+        the_attended=[]
+
+        for i in range(10):
+            the_attended.append(
+                self.attention_layers[i](
+                    global_view=global_input,
+                    local_view= fc_original if i%2==0 else fc_augmentation
+                )
+            )
+
+        attended_layers = torch.cat(the_attended, dim=-1)
+
+        final_layer = self.fc_out(attended_layers)
+
+        return final_layer
 
 @beartype
 class Encoder(torch.nn.Module):
@@ -106,6 +169,8 @@ class Encoder(torch.nn.Module):
 
         self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(10)]
 
+        self.global_fc = FullyConnectedLayer("", input_size, input_size)
+
         self.dropout = torch.nn.Dropout(0.125)
 
         self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size-10)
@@ -114,6 +179,8 @@ class Encoder(torch.nn.Module):
 
         the_attended = []
         masks = []
+
+        global_grid = self.global_fc(encoded_grid)
 
         for i in range(10):
             masked_input = torch.where(
@@ -126,7 +193,7 @@ class Encoder(torch.nn.Module):
 
             the_attended.append(
                 self.heads[i](
-                    global_view=encoded_grid,
+                    global_view=global_grid,
                     local_view=masked_input
                 )
             )

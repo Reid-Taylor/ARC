@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedLayer
+from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, DetectionHead, FullyConnectedLayer
 from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
 from functools import partial
 
@@ -82,11 +82,11 @@ class MultiTaskEncoder(L.LightningModule):
             if value == "task_sensitive":
                 self.task_sensitives.append(key)
                 setattr(self, f"detection:{key}", TensorDictModule(
-                    FullyConnectedLayer(
+                    DetectionHead(
                         name=f"detection:{key}",
                         **network_dimensions["Attribute Detector"].get(key)
                     ),
-                    in_keys=["embedding:augmentation"],#TODO: why are we detecting augmentation from only before OR after augmentation happens? There is no way to measure the presence of a change to x, from only x_t-1 or x_t+1...
+                    in_keys=["embedding:original","embedding:augmentation"],
                     out_keys=[f"detection:{key}"]
                 ))
             elif value =="task_insensitive":
@@ -154,7 +154,7 @@ class MultiTaskEncoder(L.LightningModule):
                 results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
 
             for task in self.task_sensitives:
-                results_dict[f'detection:{task}'] = getattr(self, f"detection:{task}")(results_dict['embedding:original']).squeeze()
+                results_dict[f'detection:{task}'] = getattr(self, f"detection:{task}")(results_dict['embedding:original'], results_dict['embedding:augmentation']).squeeze()
             
             results[version]=results_dict
 

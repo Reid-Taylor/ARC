@@ -131,15 +131,15 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             "Attribute Detector": {
                 key: {
                     "input_size": shared_model_config['latent_size'],
-                    "output_size": 1,
-                    "activation": contrastive_attributes_config[key].get('activation', "sigmoid")
-                } for key in contrastive_attributes_config.keys() 
+                    "hidden_sizes": contrastive_attributes_config[key]['hidden_sizes']
+                } for key in contrastive_attributes_config.keys()
+                if contrastive_attributes_config[key]['task_type']=="task_sensitive"
             },
             "Attribute Predictor": {
                 key: {
                     "input_size": shared_model_config['latent_size'],
-                    "output_size": downstream_attributes_config[key]['output_size'],
-                    "output_channels": downstream_attributes_config[key]['output_channels'],
+                    "hidden_sizes": downstream_attributes_config[key]['hidden_sizes'],
+                    "output_sizes": downstream_attributes_config[key]['output_sizes']
                 } for key in downstream_attributes_config.keys()
             },
         }

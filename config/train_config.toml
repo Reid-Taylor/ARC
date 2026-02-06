@@ -12,12 +12,12 @@ tau = 0.85
 learning_rate = 0.001
 alpha = 0.9
 [model.encoder.downstream_attributes]
-grid_size = {output_size = 2, output_channels=30}
-num_colors = {output_size = 1, output_channels=10}
+grid_size = {hidden_sizes=[64, 10], output_sizes=[2, 30]}
+num_colors = {hidden_sizes=[64, 10], output_sizes=[1, 10]}
 [model.encoder.contrastive_attributes]
-roll = {task_type = "task_sensitive", activation = "sigmoid"}
-scale_grid = {task_type = "task_sensitive", activation = "sigmoid"}
-isolate_color = {task_type = "task_sensitive", activation = "sigmoid"}
+roll = {hidden_sizes=[64, 10], task_type = "task_sensitive"}
+scale_grid = {hidden_sizes=[64, 10], task_type = "task_sensitive"}
+isolate_color = {hidden_sizes=[64, 10], task_type = "task_sensitive"}
 rotate = {task_type = "task_insensitive"}
 reflect = {task_type = "task_insensitive"}
 color_map = {task_type = "task_insensitive"}
