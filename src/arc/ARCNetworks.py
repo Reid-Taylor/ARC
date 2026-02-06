@@ -130,7 +130,8 @@ class DetectionHead(torch.nn.Module):
         self.fc_out = FullyConnectedLayer(
             name,
             input_size=output_dim*hidden_layers,
-            output_size=output_dim
+            output_size=output_dim,
+            activation='sigmoid'
         )
 
 
