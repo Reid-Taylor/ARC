@@ -40,7 +40,7 @@ def create_dataloader(config: Dict[str, Any]):
     
     problems = ARCProblemSet.load_from_data_directory(dataset_path)
 
-    num_samples = sum([problem.num_examples+2 for problem in problems])
+    num_samples = sum(len(problems))
     
     def collate_fn(batch):
         all_grids = []
