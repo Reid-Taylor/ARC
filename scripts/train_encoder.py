@@ -35,88 +35,55 @@ from src.arc.ARCEncoder import MultiTaskEncoder
 
 
 def create_dataloader(config: Dict[str, Any]):
-    encoder_config = config['model']['encoder']
     dataset_path:str = config['training']['shared']['dataset_path']
     batch_size:int = config['training']['encoder']['batch_size']
     
-    all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_grids']
-    num_samples = len(all_grids)
+    problems = ARCProblemSet.load_from_data_directory(dataset_path)
+
+    num_samples = sum([problem.num_examples+2 for problem in problems])
     
     def collate_fn(batch):
-        names = [item["name"] for item in batch]
-
-        padded_grids = torch.stack([item["padded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
-        encoded_grids = torch.stack([item["encoded_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
-
-        # Augmentation presence flags
-        roll_augmentations = torch.stack([torch.tensor("roll" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-        scale_grid_augmentations = torch.stack([torch.tensor("scale_grid" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-        isolate_color_augmentations = torch.stack([torch.tensor("isolate_color" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-
-        reflect_augmentations = torch.stack([torch.tensor("reflect" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-        rotate_augmentations = torch.stack([torch.tensor("rotate" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-        color_map_augmentations = torch.stack([torch.tensor("color_map" in item["augmentation_set"], dtype=torch.bool) for item in batch], dim=0).reshape(-1,1).float()
-
-        padded_augmented_grids = torch.stack([item["padded_augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
-        encoded_augmented_grids = torch.stack([item["encoded_augmented_grid"] for item in batch], dim=0).reshape(-1, encoder_config['grid_size'])
-
-        # Meta attributes
-        area = torch.stack([torch.tensor(item["meta"].area, dtype=torch.float32) for item in batch], dim=0).reshape(-1,1)
-        grid_size = torch.stack([torch.tensor(item["meta"].grid_size, dtype=torch.float32) for item in batch], dim=0).reshape(-1,2)
-        num_colors = torch.stack([torch.tensor(item["meta"].num_colors, dtype=torch.float32) for item in batch], dim=0)
+        batch: list[ARCProblemSet] = batch
+        problem: ARCProblemSet = batch[0]
+        all_grids = []
+        for problem in batch:
+            for _, __, arc_grid in problem:
+                all_grids.append(arc_grid.to_dict())
+        
+        if not all_grids:
+            return TensorDict({}, batch_size=0, device=get_device())
+    
+        keys = all_grids[0].keys()
+        
+        batched_dict = {}
+        for key in keys:
+            values = [grid_dict[key] for grid_dict in all_grids]
+            
+            if isinstance(values[0], torch.Tensor):
+                batched_dict[key] = torch.cat(values, dim=0)
+            elif isinstance(values[0], str):
+                batched_dict[key] = values
+            elif isinstance(values[0], (int, float)):
+                batched_dict[key] = torch.tensor(values)
+            else:
+                batched_dict[key] = values
 
         return TensorDict(
-            {
-                "name": names,
-
-                "padded_grid": padded_grids,
-                "encoded_grid": encoded_grids,
-                "padded_augmented_grid": padded_augmented_grids,
-                "encoded_augmented_grid": encoded_augmented_grids,
-                "predicted_grid": None,
-
-                "area": area,
-                "grid_size": grid_size,
-                "num_colors": num_colors,
-                
-                "predicted_area": None,
-                "predicted_grid_size": None,
-                "predicted_num_colors": None,
-
-                "presence_reflect": reflect_augmentations,
-                "presence_rotate": rotate_augmentations,
-                "presence_color_map": color_map_augmentations,
-
-                "presence_roll": roll_augmentations,
-                "presence_scale_grid": scale_grid_augmentations,
-                "presence_isolate_color": isolate_color_augmentations,
-                
-                "predicted_presence_roll": None,
-                "predicted_presence_scale_grid": None,
-                "predicted_presence_isolate_color": None,
-
-                "online_embedding": None,
-                "target_embedding": None,
-                "online_representation": None,
-                "target_representation": None,
-                "predicted_target_representation": None
-            },
-            batch_size=len(batch),
+            batched_dict,
+            batch_size=len(all_grids),
             device=get_device()
         )
     
-    # Create dataloader
     train_dataloader = torch.utils.data.DataLoader(
-        all_grids[:int(0.9*num_samples)],
+        problems[:int(0.9*num_samples)],
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=2 if torch.cuda.is_available() else 0,
         pin_memory=(get_device().type=="cuda")
     )
-    # Create dataloader
     val_dataloader = torch.utils.data.DataLoader(
-        all_grids[int(0.9*num_samples):],
+        problems[int(0.9*num_samples):],
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
@@ -191,11 +158,9 @@ def setup_trainer(
 ) -> L.Trainer:
     """Setup Lightning trainer with callbacks and logger."""
     
-    # Create directories if they don't exist
     os.makedirs(model_save_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)
     
-    # Setup callbacks
     checkpoint_callback = ModelCheckpoint(
         dirpath=model_save_path,
         filename="arc_encoder_{epoch:02d}_{val_loss:.2f}",
@@ -211,18 +176,15 @@ def setup_trainer(
         mode="min"
     )
     
-    # Setup logger
     logger = TensorBoardLogger(
         save_dir=log_path,
         name="arc_encoder",
         version=f"train_{torch.randint(0, 10000, (1,)).item()}"
     )
     
-    # Determine accelerator
     accelerator = "gpu" if use_gpu and torch.cuda.is_available() else "cpu"
     devices = 1 if accelerator == "gpu" else "auto"
     
-    # Initialize trainer
     trainer = L.Trainer(
         max_epochs=epochs,
         callbacks=[checkpoint_callback, early_stopping],
@@ -231,7 +193,7 @@ def setup_trainer(
         devices=devices,
         log_every_n_steps=1,
         # val_check_interval=0.25,
-        check_val_every_n_epoch=25,
+        check_val_every_n_epoch=15,
         enable_progress_bar=True,
         enable_model_summary=True
     )
@@ -251,7 +213,6 @@ def main():
     
     args = parser.parse_args()
     
-    # Load configuration
     if args.config:
         config = load_config(args.config)
     else:
@@ -262,17 +223,14 @@ def main():
     print(f"  Model save path: {args.model_save_path}")
     print(f"  Using GPU: {not args.no_gpu and torch.cuda.is_available()}")
     
-    # Create dataloader
     print("Loading dataset...")
     train_dataloader, val_dataloaders = create_dataloader(config)
     print(f"Dataset loaded with {len(train_dataloader)} batches")
     
-    # Create model
     print("Initializing model...")
     model = create_model(config)
     print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
-    # Setup trainer
     print("Setting up trainer...")
     trainer = setup_trainer(
         config['training']['encoder']['epochs'],
@@ -281,11 +239,9 @@ def main():
         use_gpu=not args.no_gpu
     )
     
-    # Train model
     print("Starting training...")
     trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloaders)
     
-    # Save training metrics
     if args.output_metrics:
         metrics = {
             "best_checkpoint": trainer.checkpoint_callback.best_model_path,

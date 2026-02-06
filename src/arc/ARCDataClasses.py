@@ -1,6 +1,5 @@
 from __future__ import annotations
-from typing import Union
-from beartype.typing import Optional
+from beartype.typing import Optional, Union, Dict
 from json import JSONDecoder
 from dataclasses import dataclass
 import torch
@@ -59,15 +58,15 @@ class ARCGrid:
         self.num_colors: Float[torch.Tensor, '1'] = torch.tensor([len(unique_colors)]).to(torch.float32)
         self.color_map: Float[torch.Tensor, "1 10"] = torch.bincount(self.grid.squeeze(0).flatten() - 1, minlength=10).to(torch.float32).unsqueeze(0)
 
-    def to_tensordict(self) -> TensorDict:
-        return TensorDict({
+    def to_dict(self) -> Dict[str, Union[str, torch.Tensor, None]]:
+        return {
             "name": self.name,
             "augmentation": self.augmentation_list,
 
-            "grid:padded_original":self.padded_grid,
-            "grid:encoded_original":self.padded_grid+POSITIONAL_ENCODINGS,
-            "grid:padded_augmentation":self.padded_augmented_grid,
-            "grid:encoded_augmentation":self.padded_augmented_grid+POSITIONAL_ENCODINGS,
+            "grid:padded_original":self.padded_grid.reshape(-1,900),
+            "grid:encoded_original":(self.padded_grid+POSITIONAL_ENCODINGS).reshape(-1,900),
+            "grid:padded_augmentation":self.padded_augmented_grid.reshape(-1,900),
+            "grid:encoded_augmentation":(self.padded_augmented_grid+POSITIONAL_ENCODINGS).reshape(-1,900),
 
             "embedding:original":None,
             
@@ -78,30 +77,30 @@ class ARCGrid:
 
             "decoding:padded_original":None,
 
-            "attribute:area":self.area,
-            "attribute:grid_size":self.grid_size,
-            "attribute:num_colors":self.num_colors,
-            "attribute:color_map":self.color_map,
+            "attribute:area":self.area.unsqueeze(dim=0),
+            "attribute:grid_size":self.grid_size.unsqueeze(dim=0),
+            "attribute:num_colors":self.num_colors.unsqueeze(dim=0),
+            "attribute:color_map":self.color_map.unsqueeze(dim=0),
 
             "decoding:area":None,
             "decoding:grid_size":None,
             "decoding:num_colors":None,
             "decoding:color_map":None,
 
-            "presence:reflection":torch.tensor("reflect" in self.augmentation_list, dtype=torch.bool),
-            "presence:rotation":torch.tensor("rotate" in self.augmentation_list, dtype=torch.bool),
-            "presence:color_map":torch.tensor("color_map" in self.augmentation_list, dtype=torch.bool),
-            "presence:roll":torch.tensor("roll" in self.augmentation_list, dtype=torch.bool),
-            "presence:scale_grid":torch.tensor("scale_grid" in self.augmentation_list, dtype=torch.bool),
-            "presence:isolate_color":torch.tensor("isolate_color" in self.augmentation_list, dtype=torch.bool),
+            "presence:reflect":torch.tensor("reflect" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:rotate":torch.tensor("rotate" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:color_map":torch.tensor("color_map" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:roll":torch.tensor("roll" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:scale_grid":torch.tensor("scale_grid" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:isolate_color":torch.tensor("isolate_color" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
 
             "detection:roll":None,
             "detection:scale_grid":None,
             "detection:isolate_color":None,
-        })
+        }
     
     def augment_grid(self) -> None:
-        for aug in self.augmentation_config.augmentation_set:
+        for aug in self.augmentation_list:
             if aug == "color_map":
                 self._apply_color_map()
             elif aug == "roll":
@@ -220,8 +219,8 @@ class ARCProblemSet:
         self.name = key
         self.num_examples = len(training)
         self.examples = [{
-                "input": ARCGrid(key, training[i]['input']) ,
-                "output": ARCGrid(key, training[i]['output'])
+                "input": ARCGrid(name=key, values=training[i]['input']) ,
+                "output": ARCGrid(name=key, values=training[i]['output'])
             }
             for i in range(len(training))
         ]

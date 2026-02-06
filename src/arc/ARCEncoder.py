@@ -10,10 +10,6 @@ from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, FullyConnectedL
 from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
 from functools import partial
 
-
-# NetworkDimensions = Dict[str, Dict[str, Union[int, tuple[int]]]]
-# NetworkParameters = Dict[str, Union[List[torch.nn.Parameter], Dict[str, List[torch.nn.Parameter]]]]
-
 @beartype
 class MultiTaskEncoder(L.LightningModule):
     def __init__(
@@ -30,24 +26,24 @@ class MultiTaskEncoder(L.LightningModule):
             Encoder(
                 **network_dimensions["Encoder"]
             ),
-            in_keys=["encoded_grid","padded_grid"],
-            out_keys=["online_embedding"]
+            in_keys=["grid:encoded_original","grid:padded_original"],
+            out_keys=["embedding:original"]
         )
         self.online_projector = TensorDictModule(
             FullyConnectedLayer(
                 "Contrastive Projection (Online)",
                 **network_dimensions["Contrastive Projection"]
             ),
-            in_keys=["online_embedding"],
-            out_keys=["online_representation"]
+            in_keys=["embedding:original"],
+            out_keys=["embedding:contrastive_space:online"]
         )
 
         self.target_encoder = TensorDictModule(
             Encoder(
                 **network_dimensions["Encoder"]
             ),
-            in_keys=["encoded_grid", "padded_grid"],
-            out_keys=["target_embedding"]
+            in_keys=["grid:encoded_original","grid:padded_original"],
+            out_keys=["embedding:augmentation"]
         )
         self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
         
@@ -56,8 +52,8 @@ class MultiTaskEncoder(L.LightningModule):
                 "Contrastive Projection (Target)",
                 **network_dimensions["Contrastive Projection"]
             ),
-            in_keys=["target_embedding"],
-            out_keys=["target_representation"]
+            in_keys=["embedding:augmentation"],
+            out_keys=["embedding:contrastive_space:target"]
         )
         self.target_projector.module.load_state_dict(self.online_projector.module.state_dict())
         
@@ -66,16 +62,16 @@ class MultiTaskEncoder(L.LightningModule):
                 "Online Predictor",
                 **network_dimensions["Contrastive Predictor"]
             ),
-            in_keys=["online_representation"],
-            out_keys=["predicted_target_representation"]
+            in_keys=["embedding:contrastive_space:online"],
+            out_keys=["embedding:contrastive_space:prediction"]
         )
 
         self.decoder = TensorDictModule(
             Decoder(
                 **network_dimensions["Decoder"]
             ),
-            in_keys=["online_embedding"],
-            out_keys=["predicted_grid"]
+            in_keys=["embedding:original"],
+            out_keys=["decoding:padded_original"]
         )
 
         self.task_sensitives: list[str] = []
@@ -85,13 +81,13 @@ class MultiTaskEncoder(L.LightningModule):
         for key, value in task_type.items():
             if value == "task_sensitive":
                 self.task_sensitives.append(key)
-                setattr(self, f"attribute_detector_{key}", TensorDictModule(
+                setattr(self, f"detection:{key}", TensorDictModule(
                     FullyConnectedLayer(
-                        name=f"attribute_{key}",
+                        name=f"detection:{key}",
                         **network_dimensions["Attribute Detector"].get(key)
                     ),
-                    in_keys=["online_representation"],
-                    out_keys=[f"predicted_presence_{key}"]
+                    in_keys=["embedding:augmentation"],#TODO: why are we detecting augmentation from only before OR after augmentation happens? There is no way to measure the presence of a change to x, from only x_t-1 or x_t+1...
+                    out_keys=[f"detection:{key}"]
                 ))
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
@@ -99,13 +95,13 @@ class MultiTaskEncoder(L.LightningModule):
                 raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
         for key in attribute_requirements:
-            setattr(self, f"attribute_predictor_{key}", TensorDictModule(
+            setattr(self, f"attribute:{key}", TensorDictModule(
                 AttributeHead(
                     "Attribute Predictor",
                     **network_dimensions["Attribute Predictor"].get(key)
                 ),
-                in_keys=["online_embedding"],
-                out_keys=[f"predicted_{key}"]
+                in_keys=["embedding:original"],
+                out_keys=[f"attribute:{key}"]
             ))
 
         self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
@@ -127,79 +123,40 @@ class MultiTaskEncoder(L.LightningModule):
             "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
             "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
             "attribute_predictors": {
-                key: [p for p in getattr(self, f"attribute_predictor_{key}").module.parameters() if p.requires_grad]
+                key: [p for p in getattr(self, f"attribute:{key}").module.parameters() if p.requires_grad]
                 for key in self.downstream_attributes
             },
             "attribute_detectors": {
-                key: [p for p in getattr(self, f"attribute_detector_{key}").module.parameters() if p.requires_grad]
+                key: [p for p in getattr(self, f"detection:{key}").module.parameters() if p.requires_grad]
                 for key in self.task_sensitives
             }
         }
         return params
         
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
-        z = self.online_encoder(x['encoded_grid'], x['padded_grid'])
+        results={}
 
-        x_hat = self.decoder(z)
+        online_grids = [x['grid:encoded_original'], x['grid:padded_original']]
+        target_grids = [x['grid:encoded_augmentation'], x['grid:padded_augmentation']]
 
-        y_hat = {}
-        for key in self.downstream_attributes:
-            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
+        for online, target, version in zip([online_grids, target_grids],[target_grids, online_grids],['standard','mirrored']):
+            results_dict = {}
+            results_dict['embedding:original'] = self.online_encoder(*online)
+            results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
 
-        c = self.online_projector(z)
-        c_tilde_hat = self.online_predictor(c)
+            results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
+            results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
 
-        z_tilde = self.target_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
-        c_tilde = self.target_projector(z_tilde)
+            results_dict['embedding:augmentation'] = self.target_encoder(*target)
+            results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
 
-        attribute_detections = {}
-        for key in self.task_sensitives:
-            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(z)
+            for attribute in self.downstream_attributes:
+                results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
 
-        standard_forward = {
-            "online_embedding": z,
-            "target_embedding": z_tilde,
-            "online_representation": c,
-            "target_representation": c_tilde,
-            "predicted_target_representation": c_tilde_hat,
-            "predicted_grid": x_hat,
-            "predicted_downstream_attributes": y_hat,
-            "predicted_task_sensitive_attributes": attribute_detections
-        }
-
-        z = self.online_encoder(x['encoded_augmented_grid'], x['padded_augmented_grid'])
-
-        x_hat = self.decoder(z)
-
-        y_hat = {}
-        for key in self.downstream_attributes:
-            y_hat[key] = getattr(self, f"attribute_predictor_{key}")(z)
-
-        c = self.online_projector(z)
-        c_tilde_hat = self.online_predictor(c)
-
-        z_tilde = self.target_encoder(x['encoded_grid'], x['padded_grid'])
-        c_tilde = self.target_projector(z_tilde)
-
-        attribute_detections = {}
-        for key in self.task_sensitives:
-            attribute_detections[key] = getattr(self, f"attribute_detector_{key}")(z)
-
-        mirrored_forward = {
-            "online_embedding": z,
-            "target_embedding": z_tilde,
-            "online_representation": c,
-            "target_representation": c_tilde,
-            "predicted_target_representation": c_tilde_hat,
-            "predicted_grid": x_hat,
-            "predicted_downstream_attributes": y_hat,
-            "predicted_task_sensitive_attributes": attribute_detections
-        }
-
-        results = {
-            "standard":standard_forward,
-            "mirrored":mirrored_forward,
-        }
+            for task in self.task_sensitives:
+                results_dict[f'detection:{task}'] = getattr(self, f"detection:{task}")(results_dict['embedding:original']).squeeze()
+            
+            results[version]=results_dict
 
         return results
     
@@ -208,10 +165,10 @@ class MultiTaskEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
         all_params = self._get_parameters()
 
-        pred_standard = results['standard']["predicted_grid"].view(-1, 11)
-        pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
+        pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
+        pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
         
-        targets = batch['padded_grid'].long().view(-1)
+        targets = batch['grid:padded_original'].long().view(-1)
         
         reconstruction_loss = 0.5 * (
             F.cross_entropy(pred_standard, targets) 
@@ -221,9 +178,9 @@ class MultiTaskEncoder(L.LightningModule):
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
-            channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
-            pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
-            targets = batch[key].add(-1).long().view(-1)
+            channel_dim = getattr(self, f"attribute:{key}").module.channels
+            pred_standard = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
+            targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
             downstream_attribute_loss.append(
                 F.cross_entropy(
                     pred_standard,
@@ -235,19 +192,19 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.task_sensitives:
             task_sensitive_loss.append(
                 F.binary_cross_entropy(
-                    results['standard']["predicted_task_sensitive_attributes"][key], 
-                    batch[f"presence_{key}"]
+                    results['standard'][f"detection:{key}"], 
+                    batch[f"presence:{key}"]
                 )
             )
 
         task_invariant_loss = []
         for key in self.task_agnostics:
-            weights = batch[f'presence_{key}'].expand_as(results['standard']["predicted_target_representation"])
+            weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
             if weights.sum()>0:
                 task_invariant_loss.append(
                     F.mse_loss(
-                        results['standard']["predicted_target_representation"], 
-                        results['standard']["target_representation"], 
+                        results['standard']["embedding:contrastive_space:prediction"], 
+                        results['standard']["embedding:contrastive_space:target"], 
                         weight=weights
                     )
                 )
@@ -256,8 +213,8 @@ class MultiTaskEncoder(L.LightningModule):
 
         variable_embedding_loss = 0.0
         for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-            variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
-            variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
+            variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
+            variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
         
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
@@ -376,21 +333,22 @@ class MultiTaskEncoder(L.LightningModule):
 
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        pred_standard = results['standard']["predicted_grid"].view(-1, 11)
-        pred_mirrored = results['mirrored']["predicted_grid"].view(-1, 11)
-        targets = batch['padded_grid'].long().view(-1)
+        pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
+        pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
         
-        reconstruction_loss = 0.5 * \
-            (F.cross_entropy(pred_standard, targets) 
+        targets = batch['grid:padded_original'].long().view(-1)
+        
+        reconstruction_loss = 0.5 * (
+            F.cross_entropy(pred_standard, targets) 
                 + 
-            F.cross_entropy(pred_mirrored, targets))
+            F.cross_entropy(pred_mirrored, targets)
+        )
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
-            channel_dim = getattr(self, f"attribute_predictor_{key}").module.channels
-            
-            pred_standard = results['standard']["predicted_downstream_attributes"][key].view(-1, channel_dim)
-            targets = batch[key].add(-1).long().view(-1)
+            channel_dim = getattr(self, f"attribute:{key}").module.channels
+            pred_standard = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
+            targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
             downstream_attribute_loss.append(
                 F.cross_entropy(
                     pred_standard,
@@ -402,19 +360,19 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.task_sensitives:
             task_sensitive_loss.append(
                 F.binary_cross_entropy(
-                    results['standard']["predicted_task_sensitive_attributes"][key], 
-                    batch[f"presence_{key}"]
+                    results['standard'][f"detection:{key}"], 
+                    batch[f"presence:{key}"]
                 )
             )
 
         task_invariant_loss = []
         for key in self.task_agnostics:
-            weights = batch[f'presence_{key}'].expand_as(results['standard']["predicted_target_representation"])
+            weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
             if weights.sum()>0:
                 task_invariant_loss.append(
                     F.mse_loss(
-                        results['standard']["predicted_target_representation"], 
-                        results['standard']["target_representation"], 
+                        results['standard']["embedding:contrastive_space:prediction"], 
+                        results['standard']["embedding:contrastive_space:target"], 
                         weight=weights
                     )
                 )
@@ -422,9 +380,9 @@ class MultiTaskEncoder(L.LightningModule):
                 task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
 
         variable_embedding_loss = 0.0
-        for loss_function in [partial(anti_sparsity_loss, threshold=0.5, lambda_sparse=0.1)]:
-            variable_embedding_loss += loss_function(results["standard"]["predicted_grid"])
-            variable_embedding_loss += loss_function(results["mirrored"]["predicted_grid"])
+        for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
+            variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
+            variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
         
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
