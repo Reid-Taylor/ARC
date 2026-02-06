@@ -43,8 +43,6 @@ def create_dataloader(config: Dict[str, Any]):
     num_samples = sum([problem.num_examples+2 for problem in problems])
     
     def collate_fn(batch):
-        batch: list[ARCProblemSet] = batch
-        problem: ARCProblemSet = batch[0]
         all_grids = []
         for problem in batch:
             for _, __, arc_grid in problem:
