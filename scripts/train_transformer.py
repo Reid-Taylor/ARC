@@ -40,24 +40,24 @@ def create_dataloader(config: Dict[str, Any]):
     latent_size:int = config['model']['shared']['latent_size']
     max_num_examples:int = 3
     
-    all_grids = ARCProblemSet.load_from_data_directory(dataset_path)['list_of_tensordicts']
-    num_samples = len(all_grids)
+    problems = ARCProblemSet.load_from_data_directory(dataset_path)
+    num_samples = len(problems)
     
     def collate_fn(batch):
         names = [item["problem_name"] for item in batch]
 
-        inputs = torch.zeros(len(batch),latent_size,max_num_examples) #Lets reduce down to only consider the N = 3 per problem state for now, we can repair this assumption witt full padding, or other advanced handling via tensordicts at a later time when I have time to better familiarize myself with TensorDict as a whole.
+        inputs = torch.zeros(len(batch),latent_size,max_num_examples)
         outputs = torch.zeros(len(batch),latent_size,max_num_examples)
 
         for batch_idx, item in enumerate(batch):
             examples_list = list(item['examples'].values())
             num_examples = len(examples_list)
             for idx in range(min(num_examples,3)):
-                inputs[batch_idx, :, idx] = examples_list[idx]['input']['grid_embedding']
-                outputs[batch_idx, :, idx] = examples_list[idx]['output']['grid_embedding']
+                inputs[batch_idx, :, idx] = examples_list[idx]['input'].embedding
+                outputs[batch_idx, :, idx] = examples_list[idx]['output'].embedding
 
-        challenge = torch.cat([item['challenge']['grid_embedding'] for item in batch])
-        solution = torch.cat([item['solution']['grid_embedding'] for item in batch])
+        challenge = torch.cat([item['challenge'].embedding for item in batch])
+        solution = torch.cat([item['solution'].embedding for item in batch])
 
         return TensorDict(
             {
@@ -78,7 +78,7 @@ def create_dataloader(config: Dict[str, Any]):
         #TODO Revamp the load tensordict to pull all embeddings, and other required information from the latest saved model's inference over the latest saved models' train and val sets, respectively
     
     train_dataloader = torch.utils.data.DataLoader(
-        all_grids[:int(0.9*num_samples)],
+        problems[:int(0.9*num_samples)],
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
@@ -86,7 +86,7 @@ def create_dataloader(config: Dict[str, Any]):
         pin_memory=(get_device().type=="cuda")
     )
     val_dataloader = torch.utils.data.DataLoader(
-        all_grids[int(0.9*num_samples):],
+        problems[int(0.9*num_samples):],
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,

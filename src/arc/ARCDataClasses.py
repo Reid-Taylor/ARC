@@ -1,145 +1,106 @@
 from __future__ import annotations
-from typing import Union
-from beartype.typing import Optional
+from beartype.typing import Optional, Union, Dict
 from json import JSONDecoder
 from dataclasses import dataclass
 import torch
 import os
+import sys
+from pathlib import Path
 import glob
 from jaxtyping import Int, Float
 from tensordict import tensorclass, TensorDict
 from beartype import beartype
-
 from random import sample
 
-C: int = 10
-BATCH_SIZE:int = 1
-AUGMENTATIONS: list[str] = ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
-positional_encodings: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-
-@beartype
-class AugmentationConfig:
-    num_augmentations: int = None
-    augmentation_set: list[str]
-    def __init__(self) -> None:
-        self.num_augmentations = 1
-        self.augmentation_set: list[str] = self._augmentation_set()
-
-    def _augmentation_set(self) -> list[str]:
-        return sample(AUGMENTATIONS, k=self.num_augmentations)
-        
-    def __str__(self) -> str:
-        return f"AugmentationConfig(num_augmentations={len(self.augmentation_set)}) of [{', '.join(self.augmentation_set)}]"
-    
-    def __iter__(self):
-        yield self.augmentation_set
-
-@tensorclass
-@beartype
-class ARCGridMeta:
-    name: str
-    grid: Float[torch.Tensor, '1 H W']
-    area: Optional[Float[torch.Tensor, '1']]=None
-    grid_size: Optional[Float[torch.Tensor, '1 2']]=None
-    num_colors: Optional[Float[torch.Tensor, '1']]=None
-    color_map: Optional[Float[torch.Tensor, 'C']]=None
-    def __init__(self, name:str, grid:torch.Tensor) -> None:
-        self.name: str = name
-
-        self.area: Float[torch.Tensor, "1"] = torch.prod(torch.tensor(grid.shape)).unsqueeze(0).to(torch.float32)
-
-        self.grid_size: Float[torch.Tensor, "1 2"] = torch.tensor(grid.squeeze(dim=0).shape).unsqueeze(0).to(torch.float32)
-
-        unique_colors: Float[torch.Tensor, "_"] = torch.unique(torch.reshape(grid, [-1]))
-        self.num_colors: Float[torch.Tensor, '1'] = torch.tensor([len(unique_colors)]).to(torch.float32)
-        self.color_map: Float[torch.Tensor, "1 C"] = torch.bincount(grid.squeeze(0).flatten() - 1, minlength=C).to(torch.float32).unsqueeze(0)
-
-    def _to_tensor(self) -> torch.Tensor:
-        return torch.cat([
-            self.area,
-            self.grid_size.reshape(-1),
-            self.num_colors,
-            self.color_map.reshape(-1)
-        ]).unsqueeze(0)
+from src.arc.ARCUtils import *
 
 @tensorclass
 @beartype
 class ARCGrid:
     name:str 
     grid: Int[torch.Tensor, "1 H W"]
-    augmentation_config: AugmentationConfig
+    augmentation_list: list[str]
     augmented_grid: Int[torch.Tensor, "1 H W"]
+    area: Int[torch.Tensor, "1"]
+    grid_size: Int[torch.Tensor, "2"]
+    num_colors: Float[torch.Tensor, "1"]
+    color_map: Float[torch.Tensor, "10"]
     padded_augmented_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
     padded_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
-    meta: Optional[ARCGridMeta]=None
     attributes: Optional[Int[torch.Tensor, "1 _"]] = None
     embedding: Optional[Float[torch.Tensor, "1 D"]] = None
-    """
-    The ARC Grid represents a bit array which outlines either an input or an output grid. We use base tensor for these bit arrays, and provide helper methods which power preprocessing for each layer of the ARC network. 
-    """
     def __init__(self, name:str, values:Union[list[list[int]], torch.Tensor]) -> None:
         self.name:str = name
+        self.augmentation_list = sample(AUGMENTATIONS, k=1)
+
         self.grid: Int[torch.Tensor, "1 H W"] = torch.tensor(values, dtype=torch.int8).add(1).unsqueeze(0)
-        self.augmentation_config = AugmentationConfig()
+        self.grid_size: Float[torch.Tensor, "1 2"] = torch.tensor(self.grid.squeeze(dim=0).shape).unsqueeze(0).to(torch.float32)
+        self.area: Float[torch.Tensor, "1"] = torch.prod(self.grid_size).unsqueeze(0).to(torch.float32)
+        self.padded_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
+            pad=(0,30 - len(values[0]),0,30 - len(values)),
+            mode='constant', 
+            value= 0
+            ).to(torch.float32)
+
         self.augmented_grid: Int[torch.Tensor, "1 H W"] = self.grid.detach().clone()
         self.augment_grid()
         augmented_shape = self.augmented_grid.shape
-
         self.padded_augmented_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.augmented_grid,
             pad=(0,30 - augmented_shape[-1],0,30 - augmented_shape[-2]),
             mode='constant', 
             value= -1
             ).to(torch.float32)
 
-        self.padded_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
-            pad=(0,30 - len(values[0]),0,30 - len(values)),
-            mode='constant', 
-            value= 0
-            ).to(torch.float32)
-        
-        self.meta:ARCGridMeta = ARCGridMeta(self.name, self.grid)
+        unique_colors: Float[torch.Tensor, "_"] = torch.unique(torch.reshape(self.grid, [-1]))
+        self.num_colors: Float[torch.Tensor, '1'] = torch.tensor([len(unique_colors)]).to(torch.float32)
+        self.color_map: Float[torch.Tensor, "1 10"] = torch.bincount(self.grid.squeeze(0).flatten() - 1, minlength=10).to(torch.float32).unsqueeze(0)
 
-        self.attributes: Int[torch.Tensor, "1 _"] = self.meta._to_tensor()
+    def to_dict(self) -> Dict[str, Union[str, torch.Tensor, None]]:
+        return {
+            "name": self.name,
+            "augmentation": self.augmentation_list,
 
-    def to_tensordict(self) -> TensorDict:
-        return TensorDict({
-            "grid_embedding": torch.randn(1, 32),
-            "grid": self.padded_grid.to(torch.float32),
-            "augmented_grid": self.padded_augmented_grid.to(torch.float32),
-            "predicted_grid": None,
+            "grid:padded_original":self.padded_grid.reshape(-1,900),
+            "grid:encoded_original":(self.padded_grid+POSITIONAL_ENCODINGS).reshape(-1,900),
+            "grid:padded_augmentation":self.padded_augmented_grid.reshape(-1,900),
+            "grid:encoded_augmentation":(self.padded_augmented_grid+POSITIONAL_ENCODINGS).reshape(-1,900),
 
-            "area": self.meta.area,
-            "grid_size": self.meta.grid_size,
-            "num_colors": self.meta.num_colors,
-            "color_map": self.meta.color_map,
+            "embedding:original":None,
             
-            "predicted_area": None,
-            "predicted_grid_size": None,
-            "predicted_num_colors": None,
-            "predicted_color_map": None,
+            "embedding:augmentation":None,
+            "embedding:contrastive_space:online":None,
+            "embedding:contrastive_space:target":None,
+            "embedding:contrastive_space:prediction":None,
 
-            "presence_reflect": torch.tensor(["reflect" in self.augmentation_config.augmentation_set], dtype=torch.bool),
-            "presence_rotate": torch.tensor(["rotate" in self.augmentation_config.augmentation_set], dtype=torch.bool),
-            "presence_color_map": torch.tensor(["color_map" in self.augmentation_config.augmentation_set], dtype=torch.bool),
+            "decoding:padded_original":None,
 
-            "presence_roll": torch.tensor(["roll" in self.augmentation_config.augmentation_set], dtype=torch.bool),
-            "presence_scale_grid": torch.tensor(["scale_grid" in self.augmentation_config.augmentation_set], dtype=torch.bool),
-            "presence_isolate_color": torch.tensor(["isolate_color" in self.augmentation_config.augmentation_set], dtype=torch.bool),
-            
-            "predicted_presence_roll": None,
-            "predicted_presence_scale_grid": None,
-            "predicted_presence_isolate_color": None,
+            "attribute:area":self.area.unsqueeze(dim=0),
+            "attribute:grid_size":self.grid_size.unsqueeze(dim=0),
+            "attribute:num_colors":self.num_colors.unsqueeze(dim=0),
+            "attribute:color_map":self.color_map.unsqueeze(dim=0),
 
-            "online_embedding": None,
-            "target_embedding": None,
-            "online_representation": None,
-            "target_representation": None,
-            "predicted_target_representation": None
-        })
+            "decoding:area":None,
+            "decoding:grid_size":None,
+            "decoding:num_colors":None,
+            "decoding:color_map":None,
+
+            "presence:reflect":torch.tensor("reflect" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:rotate":torch.tensor("rotate" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:color_map":torch.tensor("color_map" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:roll":torch.tensor("roll" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:scale_grid":torch.tensor("scale_grid" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+            "presence:isolate_color":torch.tensor("isolate_color" in self.augmentation_list, dtype=torch.float32).unsqueeze(dim=0),
+
+            "detection:roll":None,
+            "detection:scale_grid":None,
+            "detection:isolate_color":None,
+        }
     
     def augment_grid(self) -> None:
-        for aug in self.augmentation_config.augmentation_set:
+        for aug in self.augmentation_list:
             if aug == "color_map":
                 self._apply_color_map()
             elif aug == "roll":
@@ -228,20 +189,6 @@ class ARCGrid:
         self.augmented_grid = new_grid.detach().clone().unsqueeze(0)
 
 @dataclass
-class ARCExample:
-    def __init__(self, name:str, data_pair:dict[str, list[list[int]]]):
-        self.name: str = name
-        self.input = ARCGrid(name=self.name, values=data_pair['input'])
-        self.output = ARCGrid(name=self.name, values=data_pair['output'])
-
-    def __str__(self) -> str:
-        return f"ARC Problem {self.name}: First Example\nInput Grid:\n{self.input.grid}\nOutput Grid:\n{self.output.grid}\n"
-    
-    def __iter__(self):
-        yield self.input
-        yield self.output
-
-@dataclass
 class ARCProblemSet:
     @staticmethod
     def load_from_data_directory(
@@ -251,40 +198,17 @@ class ARCProblemSet:
         data_dir = f"data/{dataset}/"
         json_files = glob.glob(os.path.join(data_dir, "*.json"))
         all_data: list[ARCProblemSet] = []
-        all_tensordicts: list[TensorDict] = []
 
         for file_path in json_files:
             with open(file_path, 'r') as f:
                 data = JSONDecoder().decode(f.read())
-                problem_set = ARCProblemSet(
+                all_data.append(ARCProblemSet(
                     os.path.basename(file_path)[:-5],
                     data['train'],
                     data['test']
-                )
-                all_data.append(problem_set)
-                all_tensordicts.append(problem_set.create_nested_tensordict())
+                ))
         
-
-        samples = []
-        for problem in all_data:
-            for tag, key, grid in problem:
-                samples.append({
-                    "name": problem.name,
-                    "padded_grid": grid.padded_grid.squeeze(0),
-                    "encoded_grid": grid.padded_grid.squeeze(0) + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),
-                    "embedding": None,
-                    "meta": grid.meta,
-                    "attributes": grid.attributes.squeeze(0) if grid.attributes is not None else None,
-                    "augmentation_set": grid.augmentation_config.augmentation_set,
-                    "padded_augmented_grid": grid.padded_augmented_grid,
-                    "encoded_augmented_grid": grid.padded_augmented_grid + (torch.arange((30*30)) / (30*30)).reshape(1,30,30),
-                })
-        
-        return {
-            "list_of_grids": samples, 
-            "list_of_problems": all_data, 
-            "list_of_tensordicts": all_tensordicts
-        }
+        return all_data
     
     def __init__(
             self, 
@@ -294,12 +218,12 @@ class ARCProblemSet:
             ):
         self.name = key
         self.num_examples = len(training)
-        self.examples = [
-            ARCExample(key, training[i]) 
+        self.examples = [{
+                "input": ARCGrid(name=key, values=training[i]['input']) ,
+                "output": ARCGrid(name=key, values=training[i]['output'])
+            }
             for i in range(len(training))
         ]
-        self.input_examples = [x.input for x in self.examples]
-        self.output_examples = [x.output for x in self.examples]
         self.challenge = ARCGrid(name=key, values=challenge[0]['input'])
         self.solution = ARCGrid(name=key, values=challenge[0]['output'])
 
@@ -310,8 +234,8 @@ class ARCProblemSet:
     
     def __iter__(self):
         for idx, example in enumerate(self.examples):
-            yield "example", f"{idx}", example.input
-            yield "example", f"{idx}", example.output
+            yield "example", f"{idx}", example["input"]
+            yield "example", f"{idx}", example["output"]
         yield "task", "challenge", self.challenge
         yield "task", "solution", self.solution
 
@@ -320,8 +244,8 @@ class ARCProblemSet:
         
         for i, example in enumerate(self.examples):
             examples_data[f"example_{i}"] = TensorDict({
-                "input": example.input.to_tensordict(),
-                "output": example.output.to_tensordict()
+                "input": example["input"].to_tensordict(),
+                "output": example["output"].to_tensordict()
             })
         
         # Create main TensorDict structure
@@ -334,8 +258,7 @@ class ARCProblemSet:
             "challenge": self.challenge.to_tensordict(),
             
             "solution": self.solution.to_tensordict(),
-            "transformation_description": None,
-            "random_description": None
+            "transformation_description": None
         })
         
         return arc_tensordict
