@@ -225,8 +225,6 @@ class ARCProblemSet:
             }
             for i in range(len(training))
         ]
-        self.input_examples = [x.input for x in self.examples]
-        self.output_examples = [x.output for x in self.examples]
         self.challenge = ARCGrid(name=key, values=challenge[0]['input'])
         self.solution = ARCGrid(name=key, values=challenge[0]['output'])
 
