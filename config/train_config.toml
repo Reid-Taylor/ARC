@@ -1,11 +1,11 @@
 [model]
 [model.shared]
-latent_size = 424
-transformation_dimension_size = 512
+latent_size = 256
+transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
-attention_sizes = [512, 1024, 1024]
-hidden_sizes = [256, 10]
+attention_sizes = [312, 512, 512]
+hidden_sizes = [128, 10]
 learning_rate = 0.001
 tau = 0.85
 [model.transformer]
@@ -15,9 +15,9 @@ alpha = 0.9
 grid_size = {hidden_sizes=[64, 10], output_sizes=[2, 30]}
 num_colors = {hidden_sizes=[64, 10], output_sizes=[1, 10]}
 [model.encoder.contrastive_attributes]
-roll = {hidden_sizes=[64, 10], task_type = "task_sensitive"}
-scale_grid = {hidden_sizes=[64, 10], task_type = "task_sensitive"}
-isolate_color = {hidden_sizes=[64, 10], task_type = "task_sensitive"}
+roll = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
+scale_grid = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
+isolate_color = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
 rotate = {task_type = "task_insensitive"}
 reflect = {task_type = "task_insensitive"}
 color_map = {task_type = "task_insensitive"}
@@ -26,8 +26,8 @@ color_map = {task_type = "task_insensitive"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 150
-epochs = 10000
+batch_size = 172
+epochs = 1000
 [training.transformer]
 batch_size = 1
 epochs = 1

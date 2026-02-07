@@ -81,6 +81,11 @@ class ARCGrid:
             "attribute:grid_size":self.grid_size.unsqueeze(dim=0),
             "attribute:num_colors":self.num_colors.unsqueeze(dim=0),
             "attribute:color_map":self.color_map.unsqueeze(dim=0),
+            
+            "prediction:area":None,
+            "prediction:grid_size":None,
+            "prediction:num_colors":None,
+            "prediction:color_map":None,
 
             "decoding:area":None,
             "decoding:grid_size":None,

@@ -3,7 +3,6 @@ from torch.nn import functional as F
 from jaxtyping import Float
 
 POSITIONAL_ENCODINGS: Float[torch.Tensor, "1 30 30"] = (torch.arange((30*30)) / (30*30)).reshape(1,30,30)
-BATCH_SIZE:int = 1
 AUGMENTATIONS: list[str] = ["color_map", "roll", "reflect", "rotate", "scale_grid", "isolate_color"]
 
 def entropy_density_loss(embeddings: torch.Tensor, lambda_entropy: float = 0.01) -> torch.Tensor:

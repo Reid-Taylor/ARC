@@ -10,9 +10,8 @@ class FullyConnectedLayer(torch.nn.Module):
     """
     A fully connected layer which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str=None, input_size:int=64, output_size:int=10, bias:bool=True,activation:str='relu'):
+    def __init__(self, input_size:int=64, output_size:int=10, bias:bool=True,activation:str='relu'):
         super().__init__()
-        self.name:str = name
         self.fc1 = torch.nn.Linear(input_size, output_size, bias=bias)
         if activation.lower() not in ['relu', 'softmax','sigmoid',"identity"]:
             print(f"Warning: Unsupported activation function '{activation}'. Defaulting to identity function.")
@@ -37,9 +36,9 @@ class SelfAttentionHead(torch.nn.Module):
     """
     def __init__(self, input_dim:int, head_dim:int, output_dim:int):
         super().__init__()
-        self.keys = torch.nn.Linear(input_dim, head_dim)
-        self.queries = torch.nn.Linear(input_dim, head_dim)
-        self.values = torch.nn.Linear(input_dim, output_dim)
+        self.keys = FullyConnectedLayer(input_dim, head_dim)
+        self.queries = FullyConnectedLayer(input_dim, head_dim)
+        self.values = FullyConnectedLayer(input_dim, output_dim)
 
     def forward(self, global_view:torch.Tensor, local_view:torch.Tensor) -> Float[torch.Tensor, "B T"]:
         keys = F.relu(self.keys(local_view))
@@ -68,7 +67,6 @@ class AttributeHead(torch.nn.Module):
         self.channels = output_channels
 
         self.fc_in = FullyConnectedLayer(
-            name,
             input_size=input_size,
             output_size=input_size
         )
@@ -79,18 +77,20 @@ class AttributeHead(torch.nn.Module):
         ]
 
         self.fc_out = FullyConnectedLayer(
-            name,
             input_size=int(output_dim/2)*hidden_layers,
-            output_size=output_dim*output_channels
+            output_size=output_dim*output_channels,
+            activation="identity"
         )
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
         the_attended=[]
 
+        global_map = self.fc_in(x)
+
         for i in range(len(self.attention_layers)):
             the_attended.append(
                 self.attention_layers[i](
-                    global_view= self.fc_in(x),
+                    global_view= global_map,
                     local_view=x
                 )
             )
@@ -111,13 +111,11 @@ class DetectionHead(torch.nn.Module):
         self.name = name
 
         self.fc_in = FullyConnectedLayer(
-            name,
             input_size=input_size,
             output_size=input_size
         )
 
         self.fc_global = FullyConnectedLayer(
-            name, 
             input_size=input_size*2,
             output_size=input_size
         )
@@ -128,7 +126,6 @@ class DetectionHead(torch.nn.Module):
         ]
 
         self.fc_out = FullyConnectedLayer(
-            name,
             input_size=output_dim*hidden_layers,
             output_size=output_dim,
             activation='sigmoid'
@@ -169,7 +166,7 @@ class Encoder(torch.nn.Module):
 
         self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(10)]
 
-        self.global_fc = FullyConnectedLayer("", input_size, input_size)
+        self.global_fc = FullyConnectedLayer(input_size, input_size)
 
         self.dropout = torch.nn.Dropout(0.125)
 

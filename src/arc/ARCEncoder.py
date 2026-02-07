@@ -31,7 +31,6 @@ class MultiTaskEncoder(L.LightningModule):
         )
         self.online_projector = TensorDictModule(
             FullyConnectedLayer(
-                "Contrastive Projection (Online)",
                 **network_dimensions["Contrastive Projection"]
             ),
             in_keys=["embedding:original"],
@@ -49,7 +48,6 @@ class MultiTaskEncoder(L.LightningModule):
         
         self.target_projector = TensorDictModule(
             FullyConnectedLayer(
-                "Contrastive Projection (Target)",
                 **network_dimensions["Contrastive Projection"]
             ),
             in_keys=["embedding:augmentation"],
@@ -59,7 +57,6 @@ class MultiTaskEncoder(L.LightningModule):
         
         self.online_predictor = TensorDictModule(
             FullyConnectedLayer(
-                "Online Predictor",
                 **network_dimensions["Contrastive Predictor"]
             ),
             in_keys=["embedding:contrastive_space:online"],
@@ -101,7 +98,7 @@ class MultiTaskEncoder(L.LightningModule):
                     **network_dimensions["Attribute Predictor"].get(key)
                 ),
                 in_keys=["embedding:original"],
-                out_keys=[f"attribute:{key}"]
+                out_keys=[f"prediction:{key}"]
             ))
 
         self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
