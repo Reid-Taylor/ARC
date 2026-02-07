@@ -301,7 +301,7 @@ class MultiTaskEncoder(L.LightningModule):
         torch.nn.utils.clip_grad_norm_(
             [p for params_list in all_params.values() if isinstance(params_list, list) for p in params_list] +
             [p for params_dict in all_params.values() if isinstance(params_dict, dict) for params_list in params_dict.values() for p in params_list],
-            max_norm=1.0
+            max_norm=0.5
         )
 
         opt_model.step()

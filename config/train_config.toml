@@ -1,13 +1,13 @@
 [model]
 [model.shared]
-latent_size = 256
+latent_size = 512
 transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
-attention_sizes = [312, 512, 512]
+attention_sizes = [256, 512, 512]
 hidden_sizes = [128, 10]
-learning_rate = 0.001
-tau = 0.85
+learning_rate = 0.0005
+tau = 0.8
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
