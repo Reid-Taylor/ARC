@@ -45,6 +45,7 @@ class MultiTaskEncoder(L.LightningModule):
             out_keys=["embedding:augmentation"]
         )
         self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
+        self.target_encoder.requires_grad_(False)
         
         self.target_projector = TensorDictModule(
             FullyConnectedLayer(
@@ -54,6 +55,7 @@ class MultiTaskEncoder(L.LightningModule):
             out_keys=["embedding:contrastive_space:target"]
         )
         self.target_projector.module.load_state_dict(self.online_projector.module.state_dict())
+        self.target_projector.requires_grad_(False)
         
         self.online_predictor = TensorDictModule(
             FullyConnectedLayer(
@@ -102,6 +104,7 @@ class MultiTaskEncoder(L.LightningModule):
             ))
 
         self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
+        self.conflict_ratio = 0.0
 
         self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_agnostics) + 1
         # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + embedding dissimilarity
@@ -273,13 +276,15 @@ class MultiTaskEncoder(L.LightningModule):
                                 projected_gradients[i] = g_i - projection
             
             if total_comparisons > 0:
-                global conflict_ratio
-                conflict_ratio = conflicts / total_comparisons
+                self.conflict_ratio = conflicts / total_comparisons if total_comparisons > 0 else 0.0
             
             final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
             return final_gradient
 
         def _apply_gradients_to_params(final_gradient: torch.Tensor):
+            if torch.isnan(final_gradient).any():
+                print("WARNING: NaN gradients detected in PCGrad!")
+                return
             shared_params = all_params['online_encoder']
             param_shapes = [p.shape for p in shared_params]
             param_sizes = [p.numel() for p in shared_params]
@@ -291,16 +296,51 @@ class MultiTaskEncoder(L.LightningModule):
                 start_idx += size
 
         task_gradients = _get_task_gradients()
-        final_gradient = _apply_pcgrad(task_gradients)
-        
+        final_gradient = _apply_pcgrad(task_gradients).clone()
+
         opt_model.zero_grad()
-        loss_total.backward()
-        
         _apply_gradients_to_params(final_gradient)
-        
+
+        non_shared_params = (
+            all_params["decoder"] + 
+            all_params["online_projector"] + 
+            all_params["online_predictor"]
+        )
+
+        task_specific_params = []
+        for params_dict in [all_params["attribute_predictors"], all_params["attribute_detectors"]]:
+            for param_list in params_dict.values():
+                task_specific_params.extend(param_list)
+
+        non_shared_loss = reconstruction_loss + torch.stack(task_invariant_loss).sum() if task_invariant_loss else reconstruction_loss
+
+        if len(non_shared_params) > 0:
+            non_shared_gradients = torch.autograd.grad(
+                non_shared_loss,
+                non_shared_params,
+                allow_unused=True,
+                retain_graph=True
+            )
+            
+            for param, grad in zip(non_shared_params, non_shared_gradients):
+                if grad is not None:
+                    param.grad = grad
+
+        task_specific_loss = torch.stack(downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss]).sum()
+
+        if len(task_specific_params) > 0:
+            task_specific_gradients = torch.autograd.grad(
+                task_specific_loss,
+                task_specific_params,
+                allow_unused=True
+            )
+            
+            for param, grad in zip(task_specific_params, task_specific_gradients):
+                if grad is not None:
+                    param.grad = grad
+
         torch.nn.utils.clip_grad_norm_(
-            [p for params_list in all_params.values() if isinstance(params_list, list) for p in params_list] +
-            [p for params_dict in all_params.values() if isinstance(params_dict, dict) for params_list in params_dict.values() for p in params_list],
+            non_shared_params + task_specific_params + all_params['online_encoder'],
             max_norm=0.5
         )
 
@@ -322,7 +362,7 @@ class MultiTaskEncoder(L.LightningModule):
         for key, loss in zip(self.downstream_attributes,downstream_attribute_loss):
             log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss)
         
-        log_dict["train/Surgery Ratio"] = conflict_ratio
+        log_dict["train/Surgery Ratio"] = self.conflict_ratio
         
         self.log_dict(log_dict, prog_bar=True)
 
