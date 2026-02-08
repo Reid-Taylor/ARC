@@ -73,11 +73,11 @@ class AttributeHead(torch.nn.Module):
 
         self.attention_layers = [
             SelfAttentionHead(input_size, hidden_dim, int(output_dim/2))
-            for _ in range(output_channels)
+            for _ in range(hidden_layers)
         ]
 
         self.fc_out = FullyConnectedLayer(
-            input_size=int(output_dim/2)*output_channels,
+            input_size=int(output_dim/2)*hidden_layers,
             output_size=output_dim*output_channels,
             activation="identity"
         )

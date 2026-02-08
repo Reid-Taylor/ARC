@@ -9,6 +9,7 @@ from jaxtyping import Float
 from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, DetectionHead, FullyConnectedLayer
 from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
 from functools import partial
+import numpy as np
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
@@ -181,6 +182,9 @@ class MultiTaskEncoder(L.LightningModule):
             channel_dim = getattr(self, f"attribute:{key}").module.channels
             pred_standard = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
             targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
+            # print(f"Key: {key}")
+            # print(f"Target: {targets}")
+            # print(f"Prediction: {pred_standard.argmax(dim=1)}")
             downstream_attribute_loss.append(
                 F.cross_entropy(
                     pred_standard,
@@ -283,7 +287,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         def _apply_gradients_to_params(final_gradient: torch.Tensor):
             if torch.isnan(final_gradient).any():
-                print("WARNING: NaN gradients detected in PCGrad!")
+                print("\nWARNING: NaN gradients detected in PCGrad\n")
                 return
             shared_params = all_params['online_encoder']
             param_shapes = [p.shape for p in shared_params]
@@ -307,12 +311,7 @@ class MultiTaskEncoder(L.LightningModule):
             all_params["online_predictor"]
         )
 
-        task_specific_params = []
-        for params_dict in [all_params["attribute_predictors"], all_params["attribute_detectors"]]:
-            for param_list in params_dict.values():
-                task_specific_params.extend(param_list)
-
-        non_shared_loss = reconstruction_loss + torch.stack(task_invariant_loss).sum() if task_invariant_loss else reconstruction_loss
+        non_shared_loss = reconstruction_loss + torch.stack(task_invariant_loss).sum() if task_invariant_loss else 0
 
         if len(non_shared_params) > 0:
             non_shared_gradients = torch.autograd.grad(
@@ -325,24 +324,61 @@ class MultiTaskEncoder(L.LightningModule):
             for param, grad in zip(non_shared_params, non_shared_gradients):
                 if grad is not None:
                     param.grad = grad
+        
 
-        task_specific_loss = torch.stack(downstream_attribute_loss + task_sensitive_loss + [variable_embedding_loss]).sum()
+        # task_specific_params = []
+        # for params_dict in [all_params["attribute_predictors"], all_params["attribute_detectors"]]:
+        #     for param_list in params_dict.values():
+        #         task_specific_params.extend(param_list)
 
-        if len(task_specific_params) > 0:
-            task_specific_gradients = torch.autograd.grad(
-                task_specific_loss,
-                task_specific_params,
-                allow_unused=True
-            )
-            
-            for param, grad in zip(task_specific_params, task_specific_gradients):
-                if grad is not None:
-                    param.grad = grad
+        # task_specific_loss = [torch.stack(downstream_attribute_loss).sum(), torch.stack(task_sensitive_loss).sum(), torch.stack([variable_embedding_loss]).sum()]
 
+        #* Note: I want to examine more of the documentation and the source code to determine how gradients are calculated in-graph. 
+            #*1: Does the loss tensor retain information on it's own calculation's lineage? Such that dL_i / dW_j = 0 always for i != j? 
+
+        task_specific_params = []
+        for params_dict in [all_params["attribute_predictors"], all_params["attribute_detectors"]]:
+            for param_list in params_dict.values():
+                task_specific_params.append(param_list)
+
+        task_specific_loss = downstream_attribute_loss + task_sensitive_loss
+
+        for idx in range(len(task_sensitive_loss)):
+            if len(task_specific_params) > 0:
+                task_specific_gradients = torch.autograd.grad(
+                    task_specific_loss[idx],
+                    task_specific_params[idx],
+                    allow_unused=True
+                )
+                
+                for param, grad in zip(task_specific_params[idx], task_specific_gradients):
+                    if grad is not None:
+                        param.grad = grad
+
+        all_parameters = []
+        for val in all_params.values():
+            if isinstance(val, list):
+                all_parameters.extend(val)
+            elif isinstance(val, dict):
+                for param_list in val.values():
+                    all_parameters.extend(param_list)
+        
         torch.nn.utils.clip_grad_norm_(
-            non_shared_params + task_specific_params + all_params['online_encoder'],
+            all_parameters,
             max_norm=0.5
         )
+
+        #* Norm magnitudes are very different; reimplement grad norm to scale task norms to be equal?
+
+        print(f"online_encoder: {np.mean([p.grad.norm() for p in all_params.get('online_encoder')])}")
+        print(f"online_projector: {np.mean([p.grad.norm() for p in all_params.get('online_projector')])}")
+        print(f"decoder: {np.mean([p.grad.norm() for p in all_params.get('decoder')])}")
+        print(f"online_predictor: {np.mean([p.grad.norm() for p in all_params.get('online_predictor')])}")
+        print(f"num_colors: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('num_colors')])}")
+        print(f"grid_size: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('grid_size')])}")
+        # print(f"attribute_detectors: {sum([p.grad for p in all_params.get('attribute_detector').get('')])}")
+
+        #* Note: Examine whether we are printing the correctly scoped parameter norms.
 
         opt_model.step()
 
@@ -435,16 +471,12 @@ class MultiTaskEncoder(L.LightningModule):
     def configure_optimizers(self):
         params = self._get_parameters()
 
-        opt_model = torch.optim.Adam(
-            params = (
-                params.get("online_encoder") + 
-                params.get("decoder") + 
-                params.get("online_projector") + 
-                params.get("online_predictor") + 
-                [parameter for each in params.get("attribute_predictors").values() for parameter in each] + 
-                [parameter for each in params.get("attribute_detectors").values() for parameter in each]
-            )
-            ,
-            lr=self.lr
-        )
+        opt_model = torch.optim.Adam([
+            {'params': params.get("online_encoder"), 'lr': self.lr},
+            {'params': params.get("decoder"), 'lr': self.lr * 1.8},
+            {'params': params.get("online_projector"), 'lr': self.lr * 1.2},
+            {'params': params.get("online_predictor"), 'lr': self.lr * 1.2},
+            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10},
+            {'params': [parameter for each in params.get("attribute_detectors").values() for parameter in each], 'lr': self.lr * 10}
+        ])
         return opt_model
