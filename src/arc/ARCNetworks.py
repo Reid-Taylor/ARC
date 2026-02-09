@@ -76,6 +76,8 @@ class AttributeHead(torch.nn.Module):
             for _ in range(hidden_layers)
         ]
 
+        self.dropout = torch.nn.Dropout()
+
         self.fc_out = FullyConnectedLayer(
             input_size=int(output_dim/2)*hidden_layers,
             output_size=output_dim*output_channels,
@@ -97,7 +99,7 @@ class AttributeHead(torch.nn.Module):
 
         attended_layers = torch.cat(the_attended, dim=-1)
 
-        final_layer = self.fc_out(attended_layers)
+        final_layer = self.fc_out(self.dropout(attended_layers))
 
         #?: Could it be that we should have 30 attention heads, each outputting 2 output dimension sizes? The attention heads are directly interpreted as each channel...
         #?: Other case: 10 heads, each outputting 1 number. This could provide a more intuitive architecture in which we allow the attribute heads to attend over each color channel, or each grid size option.
