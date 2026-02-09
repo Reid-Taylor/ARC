@@ -370,12 +370,12 @@ class MultiTaskEncoder(L.LightningModule):
 
         #* Norm magnitudes are very different; reimplement grad norm to scale task norms to be equal?
 
-        print(f"online_encoder: {np.mean([p.grad.norm() for p in all_params.get('online_encoder')])}")
-        print(f"online_projector: {np.mean([p.grad.norm() for p in all_params.get('online_projector')])}")
-        print(f"decoder: {np.mean([p.grad.norm() for p in all_params.get('decoder')])}")
-        print(f"online_predictor: {np.mean([p.grad.norm() for p in all_params.get('online_predictor')])}")
-        print(f"num_colors: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('num_colors')])}")
-        print(f"grid_size: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('grid_size')])}")
+        # print(f"online_encoder: {np.mean([p.grad.norm() for p in all_params.get('online_encoder')])}")
+        # print(f"online_projector: {np.mean([p.grad.norm() for p in all_params.get('online_projector')])}")
+        # print(f"decoder: {np.mean([p.grad.norm() for p in all_params.get('decoder')])}")
+        # print(f"online_predictor: {np.mean([p.grad.norm() for p in all_params.get('online_predictor')])}")
+        # print(f"num_colors: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('num_colors')])}")
+        # print(f"grid_size: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('grid_size')])}")
         # print(f"attribute_detectors: {sum([p.grad for p in all_params.get('attribute_detector').get('')])}")
 
         #* Note: Examine whether we are printing the correctly scoped parameter norms.

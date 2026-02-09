@@ -168,20 +168,22 @@ class Encoder(torch.nn.Module):
 
         attention_input, attention_head, attention_output = attention_sizes
 
-        self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(10)]
+        self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(30)]
+        self.component_fcs = [FullyConnectedLayer(input_size, input_size) for _ in range(20)]
 
-        self.global_fc = FullyConnectedLayer(input_size, input_size)
+        self.global_fc = [FullyConnectedLayer(input_size, input_size) for _ in range(2)]
 
         self.dropout = torch.nn.Dropout(0.125)
 
-        self.fc_out = FullyConnectedLayer(input_size=attention_output*10, output_size=output_size-10)
+        self.fc_out = FullyConnectedLayer(input_size=attention_output*30, output_size=output_size-10)
 
     def forward(self, encoded_grid, padded_grid) -> Float[torch.Tensor, "B D"]:
 
         the_attended = []
         masks = []
 
-        global_grid = self.global_fc(encoded_grid)
+        global_grid_masking = self.global_fc[0](encoded_grid)
+        global_grid_padding = self.global_fc[1](encoded_grid)
 
         for i in range(10):
             masked_input = torch.where(
@@ -189,16 +191,24 @@ class Encoder(torch.nn.Module):
                         1.0,
                         0.0
                     ).to(torch.float32)
-            
+
             masks.append(masked_input.sum(dim=-1))
 
             the_attended.append(
                 self.heads[i](
-                    global_view=global_grid,
+                    global_view=global_grid_masking,
                     local_view=masked_input
                 )
             )
-        
+
+        for i in range(10,30):
+            the_attended.append(
+                self.heads[i](
+                    local_view=global_grid_padding,
+                    global_view=self.component_fcs[i-10](padded_grid)
+                )
+            )
+            
         attended_layers = torch.cat(the_attended, dim=-1)
 
         attended_dropout = self.dropout(attended_layers)
