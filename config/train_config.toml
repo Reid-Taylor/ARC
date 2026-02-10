@@ -5,15 +5,15 @@ transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
 attention_sizes = [256, 512, 512]
-hidden_sizes = [128, 10]
+hidden_sizes = [256, 20]
 learning_rate = 0.0005
 tau = 0.8
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
 [model.encoder.downstream_attributes]
-grid_size = {hidden_sizes=[64, 20], output_sizes=[2, 30]}
-num_colors = {hidden_sizes=[64, 20], output_sizes=[1, 10]}
+grid_size = {hidden_sizes=[256, 90], output_sizes=[2, 30]}
+num_colors = {hidden_sizes=[256, 30], output_sizes=[1, 10]}
 [model.encoder.contrastive_attributes]
 roll = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
 scale_grid = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
