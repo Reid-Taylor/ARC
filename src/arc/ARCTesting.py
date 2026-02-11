@@ -64,8 +64,8 @@ class AutoEncoder(L.LightningModule):
             results_dict = {}
             results_dict['embedding:original'] = self.online_encoder(*online)
             results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
-
             results_dict['embedding:augmentation'] = self.online_encoder(*target)
+            results_dict['decoding:padded_augmentation'] = self.decoder(results_dict['embedding:augmentation'])
             
             results[version]=results_dict
 
@@ -77,22 +77,18 @@ class AutoEncoder(L.LightningModule):
         all_params = self._get_parameters()
 
         pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
+        pred_standard_a = results['standard']["decoding:padded_augmentation"].view(-1, 11)
         
         targets = batch['grid:padded_original'].long().view(-1)
+        targets_a = batch['grid:padded_augmentation'].long().view(-1)
         
-        reconstruction_loss = 0.5 * (
+        reconstruction_loss = (
             F.cross_entropy(pred_standard, targets) 
                 + 
-            F.cross_entropy(pred_mirrored, targets)
+            F.cross_entropy(pred_standard_a, targets_a)
         )
-
-        variable_embedding_loss = 0.0
-        for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-            variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
-            variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
         
-        loss = torch.stack([reconstruction_loss] + [variable_embedding_loss])
+        loss = torch.stack([reconstruction_loss])
 
         loss_total = torch.sum(loss)
         
@@ -212,8 +208,7 @@ class AutoEncoder(L.LightningModule):
 
         log_dict = {
             "train/Total Loss": loss_total.detach(),
-            "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach()),
-            "train/Anti Sparsity Loss": variable_embedding_loss
+            "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach())
         }
                 
         log_dict["train/Surgery Ratio"] = self.conflict_ratio
@@ -225,22 +220,18 @@ class AutoEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
         pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
+        pred_standard_a = results['standard']["decoding:padded_augmentation"].view(-1, 11)
         
         targets = batch['grid:padded_original'].long().view(-1)
+        targets_a = batch['grid:padded_augmentation'].long().view(-1)
         
-        reconstruction_loss = 0.5 * (
+        reconstruction_loss = (
             F.cross_entropy(pred_standard, targets) 
                 + 
-            F.cross_entropy(pred_mirrored, targets)
+            F.cross_entropy(pred_standard_a, targets_a)
         )
-
-        variable_embedding_loss = 0.0
-        for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-            variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
-            variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
         
-        loss = torch.stack([reconstruction_loss] + [variable_embedding_loss])
+        loss = torch.stack([reconstruction_loss])
 
         loss_total = torch.sum(loss)
 
