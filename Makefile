@@ -40,6 +40,13 @@ train-encoder:
 		--model-save-path ./models/test \
 		--log-path ./logs/test
 
+local-pressure-test:
+	@echo "Running full pipeline of ARC Encoder training..."
+	python scripts/pressure_test.py \
+		--config train_config \
+		--dataset-path $(DATASET_PATH) \
+		--model-save-path ./models/test/tmp \
+		--log-path ./logs/test/tmp
 local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	python scripts/train_encoder.py \
