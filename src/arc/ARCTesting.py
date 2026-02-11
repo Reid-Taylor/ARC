@@ -58,12 +58,14 @@ class AutoEncoder(L.LightningModule):
         results={}
 
         online_grids = [x['grid:encoded_original'], x['grid:padded_original']]
+        target_grids = [x['grid:encoded_augmentation'], x['grid:padded_augmentation']]
 
-        results_dict = {}
-        results_dict['embedding:original'] = self.online_encoder(online_grids)
-        results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
+        for online, target, version in zip([online_grids, target_grids],[target_grids, online_grids],['standard','mirrored']):
+            results_dict = {}
+            results_dict['embedding:original'] = self.online_encoder(*online)
+            results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
             
-        results["standard"]=results_dict
+            results[version]=results_dict
 
         return results
     
@@ -73,15 +75,11 @@ class AutoEncoder(L.LightningModule):
         all_params = self._get_parameters()
 
         pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        # pred_standard_a = results['standard']["decoding:padded_augmentation"].view(-1, 11)
         
         targets = batch['grid:padded_original'].long().view(-1)
-        # targets_a = batch['grid:padded_augmentation'].long().view(-1)
         
         reconstruction_loss = (
             F.cross_entropy(pred_standard, targets) 
-            #     + 
-            # F.cross_entropy(pred_standard_a, targets_a)
         )
         
         loss = torch.stack([reconstruction_loss])
