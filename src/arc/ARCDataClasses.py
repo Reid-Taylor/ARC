@@ -51,7 +51,7 @@ class ARCGrid:
         self.padded_augmented_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.augmented_grid,
             pad=(0,30 - augmented_shape[-1],0,30 - augmented_shape[-2]),
             mode='constant', 
-            value= -1
+            value= 0
             ).to(torch.float32)
 
         unique_colors: Float[torch.Tensor, "_"] = torch.unique(torch.reshape(self.grid, [-1]))
