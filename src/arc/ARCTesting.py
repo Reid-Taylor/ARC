@@ -40,7 +40,7 @@ class AutoEncoder(L.LightningModule):
 
         self.conflict_ratio = 0.0
 
-        self.num_tasks: int = 1 + 1
+        self.num_tasks: int = 1
         # This is the reconstruction task + embedding dissimilarity
         
         self.lr: float = learning_rate
