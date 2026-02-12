@@ -34,7 +34,7 @@ gcp-copy-models:
 
 train-encoder:
 	@echo "Running full pipeline of ARC Encoder training..."
-	python scripts/train_encoder.py \
+	uv run scripts/train_encoder.py \
 		--config train_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test \
@@ -42,14 +42,14 @@ train-encoder:
 
 local-pressure-test:
 	@echo "Running full pipeline of ARC Encoder training..."
-	python scripts/pressure_test.py \
-		--config train_config \
+	uv run scripts/pressure_test.py \
+		--config pressure_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp \
 		--log-path ./logs/test/tmp
 local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
-	python scripts/train_encoder.py \
+	uv run scripts/train_encoder.py \
 		--config test_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp \
@@ -57,7 +57,7 @@ local-test-encoder:
 
 local-test-transformer:
 	@echo "Running local test of ARC Encoder training..."
-	python scripts/train_transformer.py \
+	uv run scripts/train_transformer.py \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp \
 		--log-path ./logs/test/tmp
