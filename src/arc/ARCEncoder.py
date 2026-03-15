@@ -240,16 +240,16 @@ class MultiTaskEncoder(L.LightningModule):
             variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
             variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
 
-        return reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
+        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
+
+        return loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
     def training_step(self, batch):
         opt_model = self.optimizers()
         all_params = self._get_parameters()
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
-
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
+        loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
 
         loss_total = torch.sum(loss)
 
@@ -378,8 +378,6 @@ class MultiTaskEncoder(L.LightningModule):
             max_norm=0.5
         )
 
-        #* Norm magnitudes are very different; reimplement grad norm to scale task norms to be equal?
-
         opt_model.step()
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
@@ -405,9 +403,7 @@ class MultiTaskEncoder(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
-
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
+        loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
 
         loss_total = torch.sum(loss)
 
