@@ -63,13 +63,13 @@ class MultiTaskEncoder(L.LightningModule):
             out_keys=["embedding:contrastive_space:prediction"]
         )
 
-        # self.decoder = TensorDictModule(
-        #     Decoder(
-        #         **network_dimensions["Decoder"]
-        #     ),
-        #     in_keys=["embedding:original"],
-        #     out_keys=["decoding:padded_original"]
-        # )
+        self.decoder = TensorDictModule(
+            Decoder(
+                **network_dimensions["Decoder"]
+            ),
+            in_keys=["embedding:original"],
+            out_keys=["decoding:padded_original"]
+        )
 
         self.task_agnostics: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
@@ -89,8 +89,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         for key in attribute_requirements:
             setattr(self, f"attribute:{key}", TensorDictModule(
-                AttributeHead(
-                    "Attribute Predictor",
+                AttributeHead( #rename kwargs in the dict of train_encoder
                     **network_dimensions["Attribute Predictor"].get(key)
                 ),
                 in_keys=["embedding:original"],
@@ -104,6 +103,7 @@ class MultiTaskEncoder(L.LightningModule):
         
         self.lr: float = learning_rate
         self.tau:float = tau
+        self.chi = 0.9
 
         self.automatic_optimization: bool = False
 
@@ -111,7 +111,7 @@ class MultiTaskEncoder(L.LightningModule):
         params = {
             "online_encoder": [p for p in self.online_encoder.module.parameters() if p.requires_grad],
             "online_projector": [p for p in self.online_projector.module.parameters() if p.requires_grad],
-            # "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
+            "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
             "target_encoder": [p for p in self.target_encoder.module.parameters() if p.requires_grad],
             "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
             "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
@@ -138,9 +138,12 @@ class MultiTaskEncoder(L.LightningModule):
             """
             results_dict = {}
 
+            results_dict['grid:encoded_original'] = grid_1
+            results_dict['grid:encoded_augmentation'] = grid_2
+
             results_dict['embedding:original'] = self.online_encoder(grid_1)
             results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
-            # results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
+            results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
 
             results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
             results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
@@ -169,32 +172,31 @@ class MultiTaskEncoder(L.LightningModule):
                            List[torch.Tensor], 
                            torch.Tensor
                         ]:
-        # pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        # pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
+        pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
+        pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
-        # original_input = batch['grid:encoded_original'].long().view(-1)
-        # augmented_input = batch['grid:encoded_augmentation'].long().view(-1)
+        original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
+        augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
 
-        # detectable_indicators = torch.maximum(
-        #     torch.maximum(
-        #         batch['presence:roll'], 
-        #         batch['presence:scale_grid']
-        #         ),
-        #     batch['presence:isolate_color']
-        # )
+        detectable_indicators:Float[torch.Tensor, "batch_size 1 1"] = torch.maximum(
+            torch.maximum(
+                batch['presence:roll'], 
+                batch['presence:scale_grid']
+                ),
+            batch['presence:isolate_color']
+        ).view(-1,1,1)
 
-        # coalesced_input = torch.where(
-        #     detectable_indicators,
-        #     augmented_input,
-        #     original_input
-        # )
+        coalesced_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = torch.where(
+            detectable_indicators.bool(),
+            augmented_input,
+            original_input
+        )
 
-        # reconstruction_loss = 0.5 * (
-        #     F.cross_entropy(pred_standard, original_input) 
-        #         + 
-        #     F.cross_entropy(pred_mirrored, coalesced_input)
-        # )
-        reconstruction_loss = torch.tensor(0,dtype=torch.float32)
+        reconstruction_loss = 0.5 * (
+            F.cross_entropy(pred_standard.view(-1, 11), original_input.long().view(-1)) 
+                + 
+            F.cross_entropy(pred_mirrored.view(-1, 11), coalesced_input.long().view(-1))
+        )
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
@@ -328,7 +330,7 @@ class MultiTaskEncoder(L.LightningModule):
         _apply_gradients_to_params(final_gradient)
 
         non_shared_params = (
-            # all_params["decoder"] + 
+            all_params["decoder"] + 
             all_params["online_projector"] + 
             all_params["online_predictor"]
         )
@@ -363,7 +365,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         opt_model.step()
 
-        embedding_learning_rate = self.tau**self.current_epoch
+        embedding_learning_rate = self.chi**self.current_epoch
 
         if embedding_learning_rate > 0.05:
             for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
@@ -431,7 +433,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         main_optimizer = torch.optim.Adam([
             {'params': params.get("online_encoder"), 'lr': self.lr},
-            # {'params': params.get("decoder"), 'lr': self.lr * 1.8},
+            {'params': params.get("decoder"), 'lr': self.lr * 1.8},
             {'params': params.get("online_projector"), 'lr': self.lr * 1.2},
             {'params': params.get("online_predictor"), 'lr': self.lr * 1.2},
             {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10}

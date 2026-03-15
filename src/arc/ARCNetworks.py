@@ -245,14 +245,13 @@ class AttributeHead(torch.nn.Module):
     """
     A network which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11]):
+    def __init__(self, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11]):
         super().__init__()
 
         output_dim, output_channels = output_sizes
 
         assert input_size % n_heads == 0, f"Dimension mismatch @ Encoder; ({input_size},{n_heads})"
 
-        self.name = name
         self.channels = output_channels # Accessed in the ARCEncoder training step
 
         self.fc_out = FullyConnectedLayer(
@@ -276,39 +275,17 @@ class Decoder(torch.nn.Module):
     """
     A decoder module which uses attention heads to decode latent representations back into a flattened grid.
     """
-    def __init__(self, input_size:int=64, n_heads:int=10, num_layers:int=6, output_size:int=30*30):
+    def __init__(self, input_size:int=64, num_layers:int=6, output_size:int=30*30):
         super().__init__()
 
-        assert input_size % n_heads == 0, f"Dimension mismatch @ Encoder; ({input_size},{n_heads})"
-
-        """
-        How can we use physics-informed modeling principles to enforce that a row is completely nulled (val=0) or, potentially, only the trailing entries of the row are nulled? This can only happen with consecutive and trailing rows/columns.
-        """
-
-        self.n_heads = n_heads
-        self.num_layers = num_layers
-        self.dim_model = input_size
-        
-        self.mlp = MLP(
-            dim_model=self.dim_model
-        )
-        self.layer_norm = torch.nn.LayerNorm(self.dim_model)
-        self.msa = MSA(
-            num_heads = self.n_heads, 
-            dim_model = self.dim_model
-        )
+        self.mlp = MLP(num_layers, input_size, use_bias=True)
+        self.fc = FullyConnectedLayer(input_size, output_size*11, activation="identity")
 
     def forward(self, x:Float[torch.Tensor, "batch_size dim_model"]) -> Float[torch.Tensor, "batch_size 900 11"]:
 
-        output:Float[torch.Tensor, "batch_size dim_model"] = x
-        
-        for _ in range(self.num_layers):
-            attended = self.msa(self.layer_norm(output)) + output
-            output = self.mlp(self.layer_norm(attended)) + attended
+        output = self.mlp(x) + x
 
-        recreation:Float[torch.Tensor, "batch_size "] = self.layer_norm(output[:,:])
-
-        assert recreation.shape[-2]==recreation.shape[-1], f"{recreation.shape}"
+        recreation:Float[torch.Tensor, "batch_size 900 11"] = self.fc(output).view(-1, 900, 11)
 
         return recreation
 

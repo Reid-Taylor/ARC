@@ -120,7 +120,6 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             },
             "Decoder": {
                 "input_size": shared_model_config['latent_size'],
-                "n_heads": encoder_config['n_heads'],
                 "num_layers": encoder_config['n_layers'],
                 "output_size": encoder_config['grid_size']
             },
