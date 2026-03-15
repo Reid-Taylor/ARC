@@ -6,7 +6,7 @@ import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from src.arc.ARCNetworks import AttributeHead, Decoder, Encoder, DetectionHead, FullyConnectedLayer
+from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor
 from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
 from functools import partial
 import numpy as np
@@ -23,72 +23,72 @@ class MultiTaskEncoder(L.LightningModule):
         ) -> None:
         super().__init__()
 
+        self.preprocessor = TensorDictModule(
+            PreProcessor(**network_dimensions['PreProcessor']),
+            in_keys=["grid:padded_original"],
+            out_keys=["grid:encoded_original"]
+        )
+
         self.online_encoder = TensorDictModule(
-            Encoder(
-                **network_dimensions["Encoder"]
-            ),
-            in_keys=["grid:encoded_original","grid:padded_original"],
+            Encoder(**network_dimensions["Encoder"]),
+            in_keys=["grid:encoded_original"],
             out_keys=["embedding:original"]
         )
+        self.target_encoder = TensorDictModule(
+            Encoder(**network_dimensions["Encoder"]),
+            in_keys=["grid:encoded_original"],
+            out_keys=["embedding:original"]
+        )
+        self.target_encoder.module.load_state_dict(
+            self.online_encoder.module.state_dict()
+        )
+
         self.online_projector = TensorDictModule(
-            FullyConnectedLayer(
-                **network_dimensions["Contrastive Projection"]
-            ),
+            FullyConnectedLayer(**network_dimensions["Contrastive Projection"]),
             in_keys=["embedding:original"],
             out_keys=["embedding:contrastive_space:online"]
         )
-
-        self.target_encoder = TensorDictModule(
-            Encoder(
-                **network_dimensions["Encoder"]
-            ),
-            in_keys=["grid:encoded_original","grid:padded_original"],
-            out_keys=["embedding:augmentation"]
-        )
-        self.target_encoder.module.load_state_dict(self.online_encoder.module.state_dict())
-        self.target_encoder.requires_grad_(False)
-        
         self.target_projector = TensorDictModule(
-            FullyConnectedLayer(
-                **network_dimensions["Contrastive Projection"]
-            ),
+            FullyConnectedLayer(**network_dimensions["Contrastive Projection"]),
             in_keys=["embedding:augmentation"],
             out_keys=["embedding:contrastive_space:target"]
         )
-        self.target_projector.module.load_state_dict(self.online_projector.module.state_dict())
-        self.target_projector.requires_grad_(False)
+        self.target_projector.module.load_state_dict(
+            self.online_projector.module.state_dict()
+        )
         
         self.online_predictor = TensorDictModule(
-            FullyConnectedLayer(
-                **network_dimensions["Contrastive Predictor"]
-            ),
+            FullyConnectedLayer(**network_dimensions["Contrastive Predictor"]),
             in_keys=["embedding:contrastive_space:online"],
             out_keys=["embedding:contrastive_space:prediction"]
         )
 
-        self.decoder = TensorDictModule(
-            Decoder(
-                **network_dimensions["Decoder"]
-            ),
-            in_keys=["embedding:original"],
-            out_keys=["decoding:padded_original"]
-        )
+        # self.decoder = TensorDictModule(
+        #     Decoder(
+        #         **network_dimensions["Decoder"]
+        #     ),
+        #     in_keys=["embedding:original"],
+        #     out_keys=["decoding:padded_original"]
+        # )
 
-        self.task_sensitives: list[str] = []
         self.task_agnostics: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
+        self.augmentation_representations = {}
 
         for key, value in task_type.items():
             if value == "task_sensitive":
-                self.task_sensitives.append(key)
-                setattr(self, f"detection:{key}", TensorDictModule(
-                    DetectionHead(
-                        name=f"detection:{key}",
-                        **network_dimensions["Attribute Detector"].get(key)
-                    ),
-                    in_keys=["embedding:original","embedding:augmentation"],
-                    out_keys=[f"detection:{key}"]
-                ))
+                augmentation_vector = torch.randn(
+                        network_dimensions['Encoder'].get("output_size",1)
+                    )
+                #TODO: We must manually adjust each augmentation vector at training to be MINIMALLY trained to the best representation for the network, under a decaying learning rate which asymptotically approaches zero
+                """
+                Alternatively, we could measure the vector which separates original from augmentation and use this difference as the indicator of whether the augmentation has occurred. This would effectively create a vector space in which g(original_i, augmentation_j(original_i)) := z_j, for some z_j \in R^{d_model} and for all observations of augmentation_j within the training-set. This reduces trainable parameters by a significant share, and encourages more rigid construction of the embedding space.
+
+                We also would have an explicit target for which the augmentation-embedding should be trained for, dynamically set as a linear combination of augmentation transformations upon the original embedding.
+
+                Given the broader context in which this network is being trained for, that being the study of relationships between inputs and outputs, and therein learning to generalize the relationship from sets of inputs & outputs to model the application of a task from test-input to ideal solution, we should seek to learn the explicit and rigid geometric transformation(s) upon the input which product the output, especially in augmentations in which we know explicitly that the underlying transformation is the same and must be respected for various sets of anchors and augmentations. 
+                """
+                self.augmentation_representations[key] = augmentation_vector
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
             else: 
@@ -107,8 +107,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
         self.conflict_ratio = 0.0
 
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.task_sensitives) + len(self.task_agnostics) + 1
-        # This is the reconstruction task + downstream attribute tasks + task sensitive attribute tasks + embedding dissimilarity
+        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.augmentation_representations) + len(self.task_agnostics) + 1
         
         self.lr: float = learning_rate
         self.tau:float = tau
@@ -119,87 +118,108 @@ class MultiTaskEncoder(L.LightningModule):
         params = {
             "online_encoder": [p for p in self.online_encoder.module.parameters() if p.requires_grad],
             "online_projector": [p for p in self.online_projector.module.parameters() if p.requires_grad],
-            "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
+            # "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
             "target_encoder": [p for p in self.target_encoder.module.parameters() if p.requires_grad],
             "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
             "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
             "attribute_predictors": {
                 key: [p for p in getattr(self, f"attribute:{key}").module.parameters() if p.requires_grad]
                 for key in self.downstream_attributes
-            },
-            "attribute_detectors": {
-                key: [p for p in getattr(self, f"detection:{key}").module.parameters() if p.requires_grad]
-                for key in self.task_sensitives
             }
         }
         return params
         
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
+        """
+        We call the forward pass twice, once with the original and augmentation, and then with the augmentation and the original
+        """
         results={}
 
-        online_grids = [x['grid:encoded_original'], x['grid:padded_original']]
-        target_grids = [x['grid:encoded_augmentation'], x['grid:padded_augmentation']]
+        original_encoding = self.preprocessor(x['grid:padded_original'])
+        augmentation_encoding = self.preprocessor(x['grid:padded_augmentation'])
 
-        for online, target, version in zip([online_grids, target_grids],[target_grids, online_grids],['standard','mirrored']):
+        def forward_pass(grid_1, grid_2) -> Dict[str, torch.Tensor]:
+            """
+            This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results
+            """
             results_dict = {}
-            results_dict['embedding:original'] = self.online_encoder(*online)
-            results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
+
+            results_dict['embedding:original'] = self.online_encoder(grid_1)
+            results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
+            # results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
 
             results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
             results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
-
-            results_dict['embedding:augmentation'] = self.target_encoder(*target)
             results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
 
             for attribute in self.downstream_attributes:
                 results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
 
-            for task in self.task_sensitives:
-                results_dict[f'detection:{task}'] = getattr(self, f"detection:{task}")(results_dict['embedding:original'], results_dict['embedding:augmentation']).squeeze()
-            
-            results[version]=results_dict
+            for task in self.augmentation_representations.keys():
+                results_dict[f'detection:{task}'] = results_dict['embedding:augmentation'] - results_dict['embedding:original']
+
+            return results_dict
+
+        results["standard"] = forward_pass(original_encoding, augmentation_encoding)
+        results["mirrored"] = forward_pass(augmentation_encoding, original_encoding)
 
         return results
     
-    def training_step(self, batch):
-        opt_model = self.optimizers()
-        results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
-        all_params = self._get_parameters()
+    def calculate_loss(self, 
+                       results: Dict[str, Dict[str, Float[torch.Tensor, "..."]]], 
+                       batch) -> tuple[
+                           torch.Tensor, 
+                           List[torch.Tensor], 
+                           List[torch.Tensor], 
+                           List[torch.Tensor], 
+                           torch.Tensor
+                        ]:
+        # pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
+        # pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
 
-        pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
-        
-        targets = batch['grid:padded_original'].long().view(-1)
-        
-        reconstruction_loss = 0.5 * (
-            F.cross_entropy(pred_standard, targets) 
-                + 
-            F.cross_entropy(pred_mirrored, targets)
-        )
+        # original_input = batch['grid:encoded_original'].long().view(-1)
+        # augmented_input = batch['grid:encoded_augmentation'].long().view(-1)
+
+        # detectable_indicators = torch.maximum(
+        #     torch.maximum(
+        #         batch['presence:roll'], 
+        #         batch['presence:scale_grid']
+        #         ),
+        #     batch['presence:isolate_color']
+        # )
+
+        # coalesced_input = torch.where(
+        #     detectable_indicators,
+        #     augmented_input,
+        #     original_input
+        # )
+
+        # reconstruction_loss = 0.5 * (
+        #     F.cross_entropy(pred_standard, original_input) 
+        #         + 
+        #     F.cross_entropy(pred_mirrored, coalesced_input)
+        # )
+        reconstruction_loss = torch.tensor(0,dtype=torch.float32)
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             channel_dim = getattr(self, f"attribute:{key}").module.channels
             pred_standard = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
             targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
-            # print(f"Key: {key}")
-            # print(f"Target: {targets}")
-            # print(f"Prediction: {pred_standard.argmax(dim=1)}")
             downstream_attribute_loss.append(
                 F.cross_entropy(
                     pred_standard,
                     targets
                 )
-            ) 
+            )
 
         task_sensitive_loss = []
-        for key in self.task_sensitives:
-            task_sensitive_loss.append(
-                F.binary_cross_entropy(
-                    results['standard'][f"detection:{key}"], 
-                    batch[f"presence:{key}"]
-                )
-            )
+        for key in self.augmentation_representations.keys():
+            repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
+            repr_true = self.augmentation_representations[key]
+            mse = F.mse_loss(repr_diff, repr_true)
+            task_sensitive_loss.append(mse)
+            # TODO STEP3B: Train the repr. of the the augmentation's "vector" by the MSE as well, under a exp. decaying learning rate
 
         task_invariant_loss = []
         for key in self.task_agnostics:
@@ -215,22 +235,30 @@ class MultiTaskEncoder(L.LightningModule):
             else: 
                 task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
 
-        variable_embedding_loss = 0.0
+        variable_embedding_loss = torch.tensor(0,dtype=torch.float32)
         for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
             variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
             variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
-        
+
+        return reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
+
+    def training_step(self, batch):
+        opt_model = self.optimizers()
+        all_params = self._get_parameters()
+        results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
+
+        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         loss_total = torch.sum(loss)
-        
+
         def _get_task_gradients() -> Dict[int, torch.Tensor]:
             """Compute gradients for each task on the shared encoder parameters."""
             task_gradients = {}
             shared_params = all_params['online_encoder']
-            
+
             for task_idx in range(self.num_tasks):
-                opt_model.zero_grad()
                 
                 task_loss = loss[task_idx]
                 task_grads = torch.autograd.grad(
@@ -240,48 +268,48 @@ class MultiTaskEncoder(L.LightningModule):
                     create_graph=False,
                     allow_unused=True
                 )
-                
+
                 flattened_grads = []
                 for grad in task_grads:
                     if grad is not None:
                         flattened_grads.append(grad.flatten())
                     else:
                         flattened_grads.append(torch.zeros(1, device=loss.device))
-                
+
                 task_gradients[task_idx] = torch.cat(flattened_grads)
-            
+
             return task_gradients
 
         def _apply_pcgrad(task_gradients: Dict[int, torch.Tensor]) -> torch.Tensor:
             """Apply PCGrad algorithm to resolve gradient conflicts."""
             num_tasks = len(task_gradients)
             projected_gradients = {i: task_gradients[i].clone() for i in range(num_tasks)}
-            
+
             conflicts = 0
             total_comparisons = 0
-            
+
             for i in range(num_tasks):
                 for j in torch.randperm(num_tasks):
                     if i != j:
                         g_i = projected_gradients[i]
                         g_j = task_gradients[j.item()]
-                        
+
                         dot_product = torch.dot(g_i, g_j)
                         norm_i = torch.norm(g_i, p=2)
                         norm_j = torch.norm(g_j, p=2)
-                        
+
                         total_comparisons += 1
                         if norm_i > 0 and norm_j > 0:
                             cosine_sim = dot_product / (norm_i * norm_j)
-                            
+
                             if cosine_sim < 0:
                                 conflicts += 1
                                 projection = (dot_product / (norm_j ** 2)) * g_j
                                 projected_gradients[i] = g_i - projection
-            
+
             if total_comparisons > 0:
                 self.conflict_ratio = conflicts / total_comparisons if total_comparisons > 0 else 0.0
-            
+
             final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
             return final_gradient
 
@@ -292,7 +320,7 @@ class MultiTaskEncoder(L.LightningModule):
             shared_params = all_params['online_encoder']
             param_shapes = [p.shape for p in shared_params]
             param_sizes = [p.numel() for p in shared_params]
-            
+
             start_idx = 0
             for param, size, shape in zip(shared_params, param_sizes, param_shapes):
                 param_grad = final_gradient[start_idx:start_idx + size].reshape(shape)
@@ -306,7 +334,7 @@ class MultiTaskEncoder(L.LightningModule):
         _apply_gradients_to_params(final_gradient)
 
         non_shared_params = (
-            all_params["decoder"] + 
+            # all_params["decoder"] + 
             all_params["online_projector"] + 
             all_params["online_predictor"]
         )
@@ -320,38 +348,20 @@ class MultiTaskEncoder(L.LightningModule):
                 allow_unused=True,
                 retain_graph=True
             )
-            
+
             for param, grad in zip(non_shared_params, non_shared_gradients):
                 if grad is not None:
                     param.grad = grad
-        
 
-        # task_specific_params = []
-        # for params_dict in [all_params["attribute_predictors"], all_params["attribute_detectors"]]:
-        #     for param_list in params_dict.values():
-        #         task_specific_params.extend(param_list)
-
-        # task_specific_loss = [torch.stack(downstream_attribute_loss).sum(), torch.stack(task_sensitive_loss).sum(), torch.stack([variable_embedding_loss]).sum()]
-
-        #* Note: I want to examine more of the documentation and the source code to determine how gradients are calculated in-graph. 
-            #*1: Does the loss tensor retain information on it's own calculation's lineage? Such that dL_i / dW_j = 0 always for i != j? 
-
-        task_specific_params = []
-        for params_dict in [all_params["attribute_predictors"], all_params["attribute_detectors"]]:
-            for param_list in params_dict.values():
-                task_specific_params.append(param_list)
-
-        task_specific_loss = downstream_attribute_loss + task_sensitive_loss
-
-        for idx in range(len(task_sensitive_loss)):
-            if len(task_specific_params) > 0:
+        for idx, (key, parameter_list) in enumerate(all_params['attribute_predictors'].items()):
+            if len(parameter_list) > 0:
                 task_specific_gradients = torch.autograd.grad(
-                    task_specific_loss[idx],
-                    task_specific_params[idx],
+                    downstream_attribute_loss[idx],
+                    parameter_list,
                     allow_unused=True
                 )
                 
-                for param, grad in zip(task_specific_params[idx], task_specific_gradients):
+                for param, grad in zip(parameter_list, task_specific_gradients):
                     if grad is not None:
                         param.grad = grad
 
@@ -369,16 +379,6 @@ class MultiTaskEncoder(L.LightningModule):
         )
 
         #* Norm magnitudes are very different; reimplement grad norm to scale task norms to be equal?
-
-        # print(f"online_encoder: {np.mean([p.grad.norm() for p in all_params.get('online_encoder')])}")
-        # print(f"online_projector: {np.mean([p.grad.norm() for p in all_params.get('online_projector')])}")
-        # print(f"decoder: {np.mean([p.grad.norm() for p in all_params.get('decoder')])}")
-        # print(f"online_predictor: {np.mean([p.grad.norm() for p in all_params.get('online_predictor')])}")
-        # print(f"num_colors: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('num_colors')])}")
-        # print(f"grid_size: {np.mean([p.grad.norm() for p in all_params.get('attribute_predictors').get('grid_size')])}")
-        # print(f"attribute_detectors: {sum([p.grad for p in all_params.get('attribute_detector').get('')])}")
-
-        #* Note: Examine whether we are printing the correctly scoped parameter norms.
 
         opt_model.step()
 
@@ -403,60 +403,10 @@ class MultiTaskEncoder(L.LightningModule):
         self.log_dict(log_dict, prog_bar=True)
 
     def validation_step(self, batch, batch_idx):
-
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        pred_mirrored = results['mirrored']["decoding:padded_original"].view(-1, 11)
-        
-        targets = batch['grid:padded_original'].long().view(-1)
-        
-        reconstruction_loss = 0.5 * (
-            F.cross_entropy(pred_standard, targets) 
-                + 
-            F.cross_entropy(pred_mirrored, targets)
-        )
+        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
 
-        downstream_attribute_loss = []
-        for key in self.downstream_attributes:
-            channel_dim = getattr(self, f"attribute:{key}").module.channels
-            pred_standard = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
-            targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
-            downstream_attribute_loss.append(
-                F.cross_entropy(
-                    pred_standard,
-                    targets
-                )
-            ) 
-
-        task_sensitive_loss = []
-        for key in self.task_sensitives:
-            task_sensitive_loss.append(
-                F.binary_cross_entropy(
-                    results['standard'][f"detection:{key}"], 
-                    batch[f"presence:{key}"]
-                )
-            )
-
-        task_invariant_loss = []
-        for key in self.task_agnostics:
-            weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
-            if weights.sum()>0:
-                task_invariant_loss.append(
-                    F.mse_loss(
-                        results['standard']["embedding:contrastive_space:prediction"], 
-                        results['standard']["embedding:contrastive_space:target"], 
-                        weight=weights
-                    )
-                )
-            else: 
-                task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
-
-        variable_embedding_loss = 0.0
-        for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-            variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
-            variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
-        
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         loss_total = torch.sum(loss)
@@ -473,10 +423,9 @@ class MultiTaskEncoder(L.LightningModule):
 
         opt_model = torch.optim.Adam([
             {'params': params.get("online_encoder"), 'lr': self.lr},
-            {'params': params.get("decoder"), 'lr': self.lr * 1.8},
+            # {'params': params.get("decoder"), 'lr': self.lr * 1.8},
             {'params': params.get("online_projector"), 'lr': self.lr * 1.2},
             {'params': params.get("online_predictor"), 'lr': self.lr * 1.2},
-            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10},
-            {'params': [parameter for each in params.get("attribute_detectors").values() for parameter in each], 'lr': self.lr * 10}
+            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10}
         ])
         return opt_model

@@ -5,18 +5,229 @@ import torch
 from torch.nn import functional as F
 from functools import partial
 
+
+class PreProcessor(torch.nn.Module):
+    """
+    A data preprocessor with mechanics inspired by the ViT paper, 2021.
+    """
+    @beartype
+    def __init__(self, patch_len:int, dim_model:int):
+        super().__init__()
+        self.p:int = patch_len
+        self.dim_model:int = dim_model
+        self.sequence_length:int = int(30 * 30 // self.p ** 2 + 1)
+
+        self.embedding_layer = torch.nn.Linear(
+            self.p**2,
+            self.dim_model,
+            bias=False
+        )
+
+        self.positional_encoding:Float[torch.Tensor, "seq_len dim_model"] = self.pos_encoding(
+            position=self.sequence_length, 
+            d_model=self.dim_model
+        )
+    
+    @beartype
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
+        """
+        The processor expects the data presented as a 30x30 grid of float-cast discrete integer values.
+
+        This will return the linear embeddings of the patches prepended by a [CLS] token, and then summed against 1D sinusoidal positional encodings. 
+        """
+        batch_size, height, width = padded_grid.shape
+        seq_len = height * width // self.p**2
+        assert seq_len + 1 == self.sequence_length, f"Incorrect data shapes, PreProcessor Sequence Length {self.sequence_length} and {seq_len + 1}"
+
+        patches:Float[torch.Tensor, "batch_size initial_sequence dim_model"] = padded_grid.reshape((batch_size, seq_len, self.p**2))
+        class_tokens = torch.zeros(batch_size, 1, self.p**2)
+
+        patches = torch.cat((class_tokens, patches), axis=1)
+
+        result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) + self.positional_encoding
+
+        return result
+
+    @beartype
+    @staticmethod
+    def pos_encoding(position:int, d_model:int) -> Float[torch.Tensor, "seq_len dim_model"]:
+        """
+        This function accepts two parameters:
+            - position: Sequence Length
+            - d_model: The dimension of the embedding vector
+        """
+        if position == 0 or d_model <= 0:
+            return -1
+
+        pos = torch.arange(position, dtype=torch.float32).reshape(position,1)
+        ind = torch.arange(d_model, dtype=torch.float32).reshape(1,d_model)
+
+        angle_rads = pos / torch.pow(10000, (2 * (ind//2)) / d_model)
+
+        angle_rads[:,0::2] = torch.sin(angle_rads[:,0::2])
+        angle_rads[:,1::2] = torch.cos(angle_rads[:,1::2])
+
+        return angle_rads
+
+class SelfAttentionHead(torch.nn.Module):
+    def __init__(self,
+            dim_latent_space:int=64,
+            dim_model:int=8
+        ):
+        super().__init__()
+        self.dim_latent_space = dim_latent_space
+        self.dim_model = dim_model
+
+        self.W_query:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model,bias=False)
+        self.W_key:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model,bias=False)
+        self.W_value:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model,bias=False)
+
+    def forward(self, X:Float[torch.Tensor, "batch_size seq_len dim_model"]):
+        """
+        X: Float[torch.Tensor, "batch_size N D"]
+            B: Batch Size
+            N: Sequence Length
+            D: Model Dimension
+        
+        Returns self-attention computation of X, of size "batch_size seq_len head_dim" where M is defined as patch_size ** 2 // num_heads
+        """
+        query:Float[torch.Tensor, "batch_size seq_len head_dim"] = self.W_query(X)
+        key:Float[torch.Tensor, "batch_size seq_len head_dim"] = self.W_key(X)
+        value:Float[torch.Tensor, "batch_size seq_len head_dim"] = self.W_value(X)
+
+        output:Float[torch.Tensor, "batch_size seq_len M"] = self.attention(query, key, value)
+
+        return output
+    
+    @beartype
+    @staticmethod
+    def attention(
+            query:Float[torch.Tensor, "batch_size seq_len dim_model"], 
+            key:Float[torch.Tensor, "batch_size seq_len dim_model"], 
+            value:Float[torch.Tensor, "batch_size seq_len dim_model"]
+        ) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
+        """
+        Compute multi-head attention.
+        
+        Args:
+            Query, Key, Value: Matrices of shape (seq_len, dim_model)
+        
+        Returns:
+            Attention output of shape (seq_len, dim_model)
+        """
+        assert key.shape == query.shape == value.shape, f"Dimension mismatch: \n\tK: {key.shape}\n\tQ: {query.shape}\n\tV: {value.shape}"
+
+        batch_size, seq_len, dim_model = key.shape
+
+        attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
+        attention_output /= seq_len**0.5
+        attention_output = F.softmax(attention_output,dim=1)
+
+        return torch.einsum("bqq,bqd->bqd",attention_output, value)
+
+class MSA(torch.nn.Module):
+    def __init__(self,
+            num_heads:int=8,
+            dim_model:int=64
+        ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.dim_model = dim_model
+        assert self.dim_model % self.num_heads == 0, f"MHA Dimension Error: Dimension of {self.dim_model} with {self.num_heads} heads"
+
+        self.heads = [
+            SelfAttentionHead(
+                dim_latent_space=self.dim_model, 
+                dim_model=self.dim_model//self.num_heads
+            ) 
+            for _ in range(self.num_heads)
+        ]
+
+    @beartype
+    def forward(self, X:Float[torch.Tensor, "batch_size seq_len dim_model"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
+        attended_output = []
+
+        for head in self.heads:
+            attended_output.append(head(X))
+
+        output = torch.cat(attended_output, dim=-1)
+
+        assert output.shape == X.shape, "Dimension mismatch in MSA output"
+
+        return output
+
+class MLP(torch.nn.Module):
+    def __init__(self, 
+            num_layers:int = 2,
+            dim_model:int = 64,
+            activation_function:function = F.gelu,
+            use_bias:bool = False
+        ) -> None:
+        """
+        2 Layers, GeLU non-linearity assumed
+        """
+        super().__init__()
+        self.num_layers = num_layers
+        self.dim_model = dim_model
+        self.activation_function = activation_function
+        self.use_bias = use_bias
+        self.layers = [
+            torch.nn.Linear(
+                self.dim_model, 
+                self.dim_model, 
+                bias=self.use_bias
+            ) for _ in range(self.num_layers)
+        ]
+
+    def forward(self,input):
+        output=input
+        for i in range(self.num_layers):
+            output = self.layers[i](output)
+            output = self.activation_function(output)
+        
+        return output
+
+class Encoder(torch.nn.Module):
+    def __init__(self, n_heads, num_layers, dim_model):
+        super().__init__()
+        self.n_heads = n_heads
+        self.num_layers = num_layers
+        self.dim_model = dim_model
+        
+        self.mlp = MLP(dim_model=self.dim_model)
+        self.layer_norm = torch.nn.LayerNorm(self.dim_model)
+        self.msa = MSA(self.n_heads, self.dim_model)
+
+    def forward(self, processed_grid_repr):
+        """
+        In parallel to ViT's architecture, we want to construct k heads, with each fed their own W,K,V projections into subspace D_h. From here, we then produce and return a isomorphic projection of the concatenated outputs. We add no bias at any point in this structure.
+
+        We implement residual layers for each transformation, alternating MLPs and MSAs, with pre-op LayerNorms in line with ViT.
+        """
+        output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
+        for _ in range(self.num_layers):
+            attended = self.msa(self.layer_norm(output)) + output
+            output = self.mlp(self.layer_norm(attended)) + attended
+
+        output:Float[torch.Tensor, "batch_size 1 D"] = self.layer_norm(output[:,0,:])
+
+        return output
+
 @beartype
 class FullyConnectedLayer(torch.nn.Module):
     """
     A fully connected layer which predicts specific attributes from the latent representation.
     """
-    def __init__(self, input_size:int=64, output_size:int=10, bias:bool=True,activation:str='relu'):
+    def __init__(self, input_size:int=64, output_size:int=10, bias:bool=True, activation:str='relu'):
         super().__init__()
         self.fc1 = torch.nn.Linear(input_size, output_size, bias=bias)
-        if activation.lower() not in ['relu', 'softmax','sigmoid',"identity"]:
+
+        if activation.lower() not in ['relu', 'gelu', 'softmax','sigmoid',"identity"]:
             print(f"Warning: Unsupported activation function '{activation}'. Defaulting to identity function.")
         if activation == 'relu':
             self.activation = F.relu
+        elif activation == 'gelu':
+            self.activation = F.gelu
         elif activation == 'softmax':
             self.activation = partial(F.softmax, dim=-1)
         elif activation == 'sigmoid':
@@ -26,242 +237,81 @@ class FullyConnectedLayer(torch.nn.Module):
         else:
             self.activation = lambda x: x
 
-    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
+    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
         return self.activation(self.fc1(x))
 
-@beartype
-class SelfAttentionHead(torch.nn.Module):
-    """
-    Naive implementation of a self-attention head.
-    """
-    def __init__(self, input_dim:int, head_dim:int, output_dim:int):
-        super().__init__()
-        self.keys = FullyConnectedLayer(input_dim, head_dim)
-        self.queries = FullyConnectedLayer(input_dim, head_dim)
-        self.values = FullyConnectedLayer(input_dim, output_dim)
-
-    def forward(self, global_view:torch.Tensor, local_view:torch.Tensor) -> Float[torch.Tensor, "B T"]:
-        keys = F.relu(self.keys(local_view))
-        queries = F.relu(self.queries(global_view))
-        values = F.relu(self.values(global_view))
-
-        d_k = keys.size()[-1]
-        d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=keys.device)
-        scores = torch.matmul(queries, keys.transpose(-2, -1)) / torch.sqrt(d_k_tensor)
-        attention_weights = F.softmax(scores, dim=-1)
-        attended_values = torch.matmul(attention_weights, values)
-        return attended_values
-    
 @beartype
 class AttributeHead(torch.nn.Module):
     """
     A network which predicts specific attributes from the latent representation.
     """
-    def __init__(self, name:str, input_size:int=64, hidden_sizes:list[int]=[32,4], output_sizes:list[int]=[10,11]):
+    def __init__(self, name:str, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11]):
         super().__init__()
 
-        hidden_dim, hidden_layers = hidden_sizes
         output_dim, output_channels = output_sizes
 
+        assert input_size % n_heads == 0, f"Dimension mismatch @ Encoder; ({input_size},{n_heads})"
+
         self.name = name
-        self.channels = output_channels
-
-        self.fc_in = FullyConnectedLayer(
-            input_size=input_size,
-            output_size=input_size
-        )
-
-        self.attention_layers = [
-            SelfAttentionHead(input_size, hidden_dim, int(output_dim/2))
-            for _ in range(hidden_layers)
-        ]
-
-        self.dropout = torch.nn.Dropout()
+        self.channels = output_channels # Accessed in the ARCEncoder training step
 
         self.fc_out = FullyConnectedLayer(
-            input_size=int(output_dim/2)*hidden_layers,
-            output_size=output_dim*output_channels,
+            input_size=input_size,
+            output_size=output_dim*self.channels,
             activation="identity"
         )
 
-    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "B _"]:
-        the_attended=[]
+    def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
 
-        global_map = self.fc_in(x)
-
-        for i in range(len(self.attention_layers)):
-            the_attended.append(
-                self.attention_layers[i](
-                    global_view= global_map,
-                    local_view=x
-                )
-            )
-
-        attended_layers = torch.cat(the_attended, dim=-1)
-
-        final_layer = self.fc_out(self.dropout(attended_layers))
+        final_layer = self.fc_out(x)
 
         #?: Could it be that we should have 30 attention heads, each outputting 2 output dimension sizes? The attention heads are directly interpreted as each channel...
         #?: Other case: 10 heads, each outputting 1 number. This could provide a more intuitive architecture in which we allow the attribute heads to attend over each color channel, or each grid size option.
         #*: It appears that the attribute heads never advance past random guessing, at this point...
 
         return final_layer
-    
-@beartype
-class DetectionHead(torch.nn.Module):
-    def __init__(self, name:str, input_size:int=64, hidden_sizes:list[int]=[32,4], output_dim:int=1):
-        super().__init__()
-
-        hidden_dim, hidden_layers = hidden_sizes
-
-        self.name = name
-
-        self.fc_in = FullyConnectedLayer(
-            input_size=input_size,
-            output_size=input_size
-        )
-
-        self.fc_global = FullyConnectedLayer(
-            input_size=input_size*2,
-            output_size=input_size
-        )
-
-        self.attention_layers = [
-            SelfAttentionHead(input_size, hidden_dim, output_dim)
-            for _ in range(hidden_layers)
-        ]
-
-        self.fc_out = FullyConnectedLayer(
-            input_size=output_dim*hidden_layers,
-            output_size=output_dim,
-            activation='sigmoid'
-        )
-
-
-    def forward(self, original:torch.Tensor, augmentation:torch.Tensor) -> Float[torch.Tensor, "B 1"]:
-        fc_original = self.fc_in(original)
-        fc_augmentation = self.fc_in(augmentation)
-
-        global_input = self.fc_global(torch.cat([original, augmentation], dim=-1))
-
-        the_attended=[]
-
-        for i in range(10):
-            the_attended.append(
-                self.attention_layers[i](
-                    global_view=global_input,
-                    local_view= fc_original if i%2==0 else fc_augmentation
-                )
-            )
-
-        attended_layers = torch.cat(the_attended, dim=-1)
-
-        final_layer = self.fc_out(attended_layers)
-
-        return final_layer
-
-@beartype
-class Encoder(torch.nn.Module):
-    """
-    An encoder module which uses attention heads to encode input grids into a latent representation.
-    """
-    def __init__(self, input_size:int=30*30, attention_sizes:list[int]=(128, 71, 64), output_size:int=64):
-        super().__init__()
-
-        attention_input, attention_head, attention_output = attention_sizes
-
-        self.heads = [SelfAttentionHead(input_size, attention_head, attention_output) for _ in range(30)]
-        self.component_fcs = [FullyConnectedLayer(input_size, input_size) for _ in range(20)]
-
-        self.global_fc = [FullyConnectedLayer(input_size, input_size) for _ in range(2)]
-
-        self.dropout = torch.nn.Dropout(0.125)
-
-        self.fc_out = FullyConnectedLayer(input_size=attention_output*30, output_size=output_size-10)
-
-    def forward(self, encoded_grid, padded_grid) -> Float[torch.Tensor, "B D"]:
-
-        the_attended = []
-        masks = []
-
-        global_grid_masking = self.global_fc[0](encoded_grid)
-        global_grid_padding = self.global_fc[1](encoded_grid)
-
-        for i in range(10):
-            masked_input = torch.where(
-                        torch.eq(padded_grid, i+1),
-                        1.0,
-                        0.0
-                    ).to(torch.float32)
-
-            masks.append(masked_input.sum(dim=-1))
-
-            the_attended.append(
-                self.heads[i](
-                    global_view=global_grid_masking,
-                    local_view=masked_input
-                )
-            )
-
-        for i in range(10,30):
-            the_attended.append(
-                self.heads[i](
-                    local_view=global_grid_padding,
-                    global_view=self.component_fcs[i-10](padded_grid)
-                )
-            )
-            
-        attended_layers = torch.cat(the_attended, dim=-1)
-
-        attended_dropout = self.dropout(attended_layers)
-
-        final_layer = self.fc_out(attended_dropout)
-
-        masks_tensor = torch.stack(masks,dim=-1)
-        return torch.cat([final_layer, masks_tensor], dim=-1)
 
 @beartype
 class Decoder(torch.nn.Module):
     """
     A decoder module which uses attention heads to decode latent representations back into a flattened grid.
     """
-    def __init__(self, input_size:int=64, hidden_sizes:list[int]=(128, 4), output_size:int=30*30):
+    def __init__(self, input_size:int=64, n_heads:int=10, num_layers:int=6, output_size:int=30*30):
         super().__init__()
 
-        hidden_dims, hidden_layers = hidden_sizes
-
-        self.linear_maps = [FullyConnectedLayer(input_size=input_size, output_size=hidden_dims) for _ in range(hidden_layers)]
-
-        self.encoding_map = FullyConnectedLayer(input_size=input_size, output_size=hidden_dims)
-
-        self.hidden_layers = [SelfAttentionHead(input_dim=hidden_dims, head_dim=hidden_dims, output_dim=hidden_dims) for _ in range(hidden_layers)]
+        assert input_size % n_heads == 0, f"Dimension mismatch @ Encoder; ({input_size},{n_heads})"
 
         """
-        After creating this decoder module, how could we architect the weights such that the layers are shared, or influenced, by each other to minimize weights trainable, as well as compute necessary.
+        How can we use physics-informed modeling principles to enforce that a row is completely nulled (val=0) or, potentially, only the trailing entries of the row are nulled? This can only happen with consecutive and trailing rows/columns.
         """
 
-        self.fc_out = FullyConnectedLayer(input_size=hidden_dims*hidden_layers, output_size=output_size * 11)
-    
-    def forward(self, x) -> Float[torch.Tensor, "B 900 11"]:
-        attended_list = []
+        self.n_heads = n_heads
+        self.num_layers = num_layers
+        self.dim_model = input_size
+        
+        self.mlp = MLP(
+            dim_model=self.dim_model
+        )
+        self.layer_norm = torch.nn.LayerNorm(self.dim_model)
+        self.msa = MSA(
+            num_heads = self.n_heads, 
+            dim_model = self.dim_model
+        )
 
-        x_mapped = self.encoding_map(x)
+    def forward(self, x:Float[torch.Tensor, "batch_size dim_model"]) -> Float[torch.Tensor, "batch_size 900 11"]:
 
-        for idx in range(len(self.hidden_layers)):
-            x_1 = self.linear_maps[idx](x)
-            attended_list.append(
-                self.hidden_layers[idx](
-                    global_view=x_mapped, 
-                    local_view=x_1
-                )
-            )
+        output:Float[torch.Tensor, "batch_size dim_model"] = x
+        
+        for _ in range(self.num_layers):
+            attended = self.msa(self.layer_norm(output)) + output
+            output = self.mlp(self.layer_norm(attended)) + attended
 
-        attended = torch.cat(attended_list,dim=-1)
+        recreation:Float[torch.Tensor, "batch_size "] = self.layer_norm(output[:,:])
 
-        logits = self.fc_out(attended)
+        assert recreation.shape[-2]==recreation.shape[-1], f"{recreation.shape}"
 
-        return logits.view(-1, 900, 11)
-    
+        return recreation
+
 @beartype
 class TransformationSpaceProjection(torch.nn.Module):
     """

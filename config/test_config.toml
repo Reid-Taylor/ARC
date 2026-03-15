@@ -1,23 +1,24 @@
 [model]
 [model.shared]
-latent_size = 32
+latent_size = 30
+patch_len = 5
 transformation_dimension_size = 10
 [model.encoder]
 grid_size = 900
-hidden_sizes = [13, 10]
-attention_sizes = [10,10,10]
+n_heads = 10
+n_layers = 1
 learning_rate = 0.001
 tau = 0.85
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
 [model.encoder.downstream_attributes]
-grid_size = {hidden_sizes=[6, 4], output_sizes=[2, 30]}
-num_colors = {hidden_sizes=[6, 4], output_sizes=[1, 10]}
+grid_size = {n_heads=2, output_sizes=[2, 30]}
+num_colors = {n_heads=2, output_sizes=[1, 10]}
 [model.encoder.contrastive_attributes]
-roll = {hidden_sizes=[4, 10], task_type = "task_sensitive"}
-scale_grid = {hidden_sizes=[4, 10], task_type = "task_sensitive"}
-isolate_color = {hidden_sizes=[4, 10], task_type = "task_sensitive"}
+roll = {hidden_sizes=[4, 8], task_type = "task_sensitive"}
+scale_grid = {hidden_sizes=[4, 8], task_type = "task_sensitive"}
+isolate_color = {hidden_sizes=[4, 8], task_type = "task_sensitive"}
 rotate = {task_type = "task_insensitive"}
 reflect = {task_type = "task_insensitive"}
 color_map = {task_type = "task_insensitive"}

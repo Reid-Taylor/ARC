@@ -6,9 +6,7 @@ import torch
 from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
-from src.arc.ARCNetworks import Decoder, Encoder
-from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
-from functools import partial
+from src.arc.ARCNetworks import BaseDecoder, BaseEncoder
 
 @beartype
 class AutoEncoder(L.LightningModule):
@@ -23,20 +21,50 @@ class AutoEncoder(L.LightningModule):
         super().__init__()
 
         self.online_encoder = TensorDictModule(
-            Encoder(
+            BaseEncoder(
                 **network_dimensions["Encoder"]
             ),
             in_keys=["grid:encoded_original","grid:padded_original"],
             out_keys=["embedding:original"]
         )
 
+        def init_identity_weights(module):
+            """
+            Looking to confirm that there is, in fact, a perfect solution here. Really just sanity checking the data
+            """
+            if isinstance(module, torch.nn.Linear):
+                if module.weight.shape[0] == module.weight.shape[1]:
+                    torch.nn.init.eye_(module.weight)
+                else:
+                    torch.nn.init.orthogonal_(module.weight)
+                
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            
+            elif isinstance(module, torch.nn.Conv2d):
+                fan_in = module.weight.size(1)
+                fan_out = module.weight.size(0)
+                
+                torch.nn.init.zeros_(module.weight)
+                
+                for i in range(min(fan_in, fan_out)):
+                    center = module.kernel_size[0] // 2
+                    module.weight[i, i, center, center] = 1.0
+                
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+
+        self.online_encoder.module.apply(init_identity_weights)
+
         self.decoder = TensorDictModule(
-            Decoder(
+            BaseDecoder(
                 **network_dimensions["Decoder"]
             ),
             in_keys=["embedding:original"],
             out_keys=["decoding:padded_original"]
         )
+
+        self.decoder.module.apply(init_identity_weights)
 
         self.conflict_ratio = 0.0
 
@@ -74,12 +102,12 @@ class AutoEncoder(L.LightningModule):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
         all_params = self._get_parameters()
 
-        pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
+        pred_standard = results['standard']["decoding:padded_original"]
         
-        targets = batch['grid:padded_original'].long().view(-1)
+        targets = batch['grid:padded_original']
         
         reconstruction_loss = (
-            F.cross_entropy(pred_standard, targets) 
+            F.mse_loss(pred_standard, targets) 
         )
         
         loss = torch.stack([reconstruction_loss])
@@ -164,6 +192,8 @@ class AutoEncoder(L.LightningModule):
         task_gradients = _get_task_gradients()
         final_gradient = _apply_pcgrad(task_gradients).clone()
 
+        #TOdO: Rewrite the ARCTesting model to perform isomorphic embedding and reconstruction. Ensure all dimensions are equivalent, and remove the dropout layers. 
+
         opt_model.zero_grad()
         _apply_gradients_to_params(final_gradient)
 
@@ -213,16 +243,12 @@ class AutoEncoder(L.LightningModule):
 
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        pred_standard = results['standard']["decoding:padded_original"].view(-1, 11)
-        # pred_standard_a = results['standard']["decoding:padded_augmentation"].view(-1, 11)
+        pred_standard = results['standard']["decoding:padded_original"]
         
-        targets = batch['grid:padded_original'].long().view(-1)
-        # targets_a = batch['grid:padded_augmentation'].long().view(-1)
+        targets = batch['grid:padded_original']
         
         reconstruction_loss = (
-            F.cross_entropy(pred_standard, targets) 
-                # + 
-            # F.cross_entropy(pred_standard_a, targets_a)
+            F.mse_loss(pred_standard, targets) 
         )
         
         loss = torch.stack([reconstruction_loss])

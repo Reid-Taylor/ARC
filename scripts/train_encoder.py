@@ -109,14 +109,19 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
         learning_rate=learning_rate,
         tau=config['model']['encoder']['tau'],
         **{
+            "PreProcessor": {
+                "patch_len": shared_model_config['patch_len'],
+                "dim_model": shared_model_config['latent_size']
+            },
             "Encoder": {
-                "input_size": encoder_config['grid_size'],
-                "attention_sizes": encoder_config['attention_sizes'],
-                "output_size": shared_model_config['latent_size']
+                "n_heads": encoder_config['n_heads'],
+                "num_layers": encoder_config['n_layers'],
+                "dim_model": shared_model_config['latent_size']
             },
             "Decoder": {
                 "input_size": shared_model_config['latent_size'],
-                "hidden_sizes": encoder_config['hidden_sizes'],
+                "n_heads": encoder_config['n_heads'],
+                "num_layers": encoder_config['n_layers'],
                 "output_size": encoder_config['grid_size']
             },
             "Contrastive Projection": {
@@ -138,7 +143,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             "Attribute Predictor": {
                 key: {
                     "input_size": shared_model_config['latent_size'],
-                    "hidden_sizes": downstream_attributes_config[key]['hidden_sizes'],
+                    "n_heads": downstream_attributes_config[key]['n_heads'],
                     "output_sizes": downstream_attributes_config[key]['output_sizes']
                 } for key in downstream_attributes_config.keys()
             },

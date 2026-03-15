@@ -14,6 +14,7 @@ dependencies = [
     "jaxtyping>=0.3.4",
     "lightning>=2.6.0",
     "numpy>=2.4.0",
+    "open-clip-torch>=3.3.0",
     "pandas>=2.3.3",
     "pytest>=9.0.2",
     "tensorboard>=2.20.0",

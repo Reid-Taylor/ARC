@@ -1,0 +1,33 @@
+[model]
+[model.shared]
+latent_size = 256
+transformation_dimension_size = 900
+[model.encoder]
+grid_size = 900
+attention_sizes = [900, 900, 900]
+hidden_sizes = [900, 10]
+learning_rate = 0.005
+tau = 0.75
+[model.transformer]
+learning_rate = 0.001
+alpha = 0.9
+[model.encoder.downstream_attributes]
+grid_size = {hidden_sizes=[256, 90], output_sizes=[2, 30]}
+num_colors = {hidden_sizes=[256, 30], output_sizes=[1, 10]}
+[model.encoder.contrastive_attributes]
+roll = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
+scale_grid = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
+isolate_color = {hidden_sizes=[32, 10], task_type = "task_sensitive"}
+rotate = {task_type = "task_insensitive"}
+reflect = {task_type = "task_insensitive"}
+color_map = {task_type = "task_insensitive"}
+
+[training]
+[training.shared]
+dataset_path = "training"
+[training.encoder]
+batch_size = 488
+epochs = 5000
+[training.transformer]
+batch_size = 1
+epochs = 1

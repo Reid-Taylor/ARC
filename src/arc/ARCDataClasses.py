@@ -59,14 +59,15 @@ class ARCGrid:
         self.color_map: Float[torch.Tensor, "1 10"] = torch.bincount(self.grid.squeeze(0).flatten() - 1, minlength=10).to(torch.float32).unsqueeze(0)
 
     def to_dict(self) -> Dict[str, Union[str, torch.Tensor, None]]:
+
         return {
             "name": self.name,
             "augmentation": self.augmentation_list,
 
-            "grid:padded_original":self.padded_grid.reshape(-1,900),
-            "grid:encoded_original":(self.padded_grid+POSITIONAL_ENCODINGS).reshape(-1,900),
-            "grid:padded_augmentation":self.padded_augmented_grid.reshape(-1,900),
-            "grid:encoded_augmentation":(self.padded_augmented_grid+POSITIONAL_ENCODINGS).reshape(-1,900),
+            "grid:padded_original":self.padded_grid,
+            "grid:encoded_original":None,
+            "grid:padded_augmentation":self.padded_augmented_grid,
+            "grid:encoded_augmentation":None,
 
             "embedding:original":None,
             
