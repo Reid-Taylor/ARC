@@ -368,30 +368,35 @@ class MultiTaskEncoder(L.LightningModule):
         embedding_learning_rate = self.chi**self.current_epoch
 
         if embedding_learning_rate > 0.05:
+            num_aug = len(self.augmentation_representations)
             for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
+                is_last = (idx == num_aug - 1)
                 task_specific_gradient = torch.autograd.grad(
                     task_sensitive_loss[idx],
                     parameter,
                     allow_unused=True,
-                    retain_graph=True
+                    retain_graph=not is_last
                 )[0]
 
                 if task_specific_gradient is None:
                     continue
 
-                with torch.no_grad():
-                    parameter.grad = task_specific_gradient.detach()
+                self._aug_grads = getattr(self, '_aug_grads', {})
+                self._aug_grads[key] = task_specific_gradient.detach()
 
             for key, parameter in self.augmentation_representations.items():
-                if parameter.grad is None:
+                grad = self._aug_grads.get(key)
+                if grad is None:
                     continue
 
                 with torch.no_grad():
                     new_parameter = (
-                        (1 - embedding_learning_rate) * parameter - embedding_learning_rate * parameter.grad
+                        (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
                     )
 
                 self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
+
+            del self._aug_grads
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
