@@ -78,16 +78,9 @@ class MultiTaskEncoder(L.LightningModule):
         for key, value in task_type.items():
             if value == "task_sensitive":
                 augmentation_vector = torch.randn(
-                        network_dimensions['Encoder'].get("output_size",1)
+                        network_dimensions['Encoder'].get("dim_model",1),
+                        requires_grad=True
                     )
-                #TODO: We must manually adjust each augmentation vector at training to be MINIMALLY trained to the best representation for the network, under a decaying learning rate which asymptotically approaches zero
-                """
-                Alternatively, we could measure the vector which separates original from augmentation and use this difference as the indicator of whether the augmentation has occurred. This would effectively create a vector space in which g(original_i, augmentation_j(original_i)) := z_j, for some z_j \in R^{d_model} and for all observations of augmentation_j within the training-set. This reduces trainable parameters by a significant share, and encourages more rigid construction of the embedding space.
-
-                We also would have an explicit target for which the augmentation-embedding should be trained for, dynamically set as a linear combination of augmentation transformations upon the original embedding.
-
-                Given the broader context in which this network is being trained for, that being the study of relationships between inputs and outputs, and therein learning to generalize the relationship from sets of inputs & outputs to model the application of a task from test-input to ideal solution, we should seek to learn the explicit and rigid geometric transformation(s) upon the input which product the output, especially in augmentations in which we know explicitly that the underlying transformation is the same and must be respected for various sets of anchors and augmentations. 
-                """
                 self.augmentation_representations[key] = augmentation_vector
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
@@ -125,7 +118,8 @@ class MultiTaskEncoder(L.LightningModule):
             "attribute_predictors": {
                 key: [p for p in getattr(self, f"attribute:{key}").module.parameters() if p.requires_grad]
                 for key in self.downstream_attributes
-            }
+            },
+            "transformation_representations": [value for value in self.augmentation_representations.values()]
         }
         return params
         
@@ -168,6 +162,7 @@ class MultiTaskEncoder(L.LightningModule):
     def calculate_loss(self, 
                        results: Dict[str, Dict[str, Float[torch.Tensor, "..."]]], 
                        batch) -> tuple[
+                           torch.Tensor,
                            torch.Tensor, 
                            List[torch.Tensor], 
                            List[torch.Tensor], 
@@ -219,7 +214,6 @@ class MultiTaskEncoder(L.LightningModule):
             repr_true = self.augmentation_representations[key]
             mse = F.mse_loss(repr_diff, repr_true)
             task_sensitive_loss.append(mse)
-            # TODO STEP3B: Train the repr. of the the augmentation's "vector" by the MSE as well, under a exp. decaying learning rate
 
         task_invariant_loss = []
         for key in self.task_agnostics:
@@ -365,20 +359,37 @@ class MultiTaskEncoder(L.LightningModule):
                     if grad is not None:
                         param.grad = grad
 
-        all_parameters = []
-        for val in all_params.values():
-            if isinstance(val, list):
-                all_parameters.extend(val)
-            elif isinstance(val, dict):
-                for param_list in val.values():
-                    all_parameters.extend(param_list)
-        
-        torch.nn.utils.clip_grad_norm_(
-            all_parameters,
-            max_norm=0.5
-        )
+        self.clip_gradients(opt_model,gradient_clip_val=0.5, gradient_clip_algorithm="norm")
 
         opt_model.step()
+
+        embedding_learning_rate = self.tau**self.current_epoch
+
+        if embedding_learning_rate > 0.05:
+            for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
+                task_specific_gradient = torch.autograd.grad(
+                    task_sensitive_loss[idx],
+                    parameter,
+                    allow_unused=True,
+                    retain_graph=True
+                )[0]
+
+                if task_specific_gradient is None:
+                    continue
+
+                with torch.no_grad():
+                    parameter.grad = task_specific_gradient.detach()
+
+            for key, parameter in self.augmentation_representations.items():
+                if parameter.grad is None:
+                    continue
+
+                with torch.no_grad():
+                    new_parameter = (
+                        (1 - embedding_learning_rate) * parameter - embedding_learning_rate * parameter.grad
+                    )
+
+                self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
@@ -390,7 +401,8 @@ class MultiTaskEncoder(L.LightningModule):
             "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach()),
             "train/P(Detection)": torch.exp(-1.0*torch.stack(task_sensitive_loss).detach().mean()) if task_sensitive_loss else torch.tensor(0.0),
             "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
-            "train/Anti Sparsity Loss": variable_embedding_loss
+            "train/Anti Sparsity Loss": variable_embedding_loss,
+            "train/Embedding LR": embedding_learning_rate
         }
         
         for key, loss in zip(self.downstream_attributes,downstream_attribute_loss):
@@ -403,7 +415,7 @@ class MultiTaskEncoder(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+        loss, _, _, _, _, _ = self.calculate_loss(results, batch)
 
         loss_total = torch.sum(loss)
 
@@ -417,11 +429,12 @@ class MultiTaskEncoder(L.LightningModule):
     def configure_optimizers(self):
         params = self._get_parameters()
 
-        opt_model = torch.optim.Adam([
+        main_optimizer = torch.optim.Adam([
             {'params': params.get("online_encoder"), 'lr': self.lr},
             # {'params': params.get("decoder"), 'lr': self.lr * 1.8},
             {'params': params.get("online_projector"), 'lr': self.lr * 1.2},
             {'params': params.get("online_predictor"), 'lr': self.lr * 1.2},
             {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10}
         ])
-        return opt_model
+
+        return main_optimizer
