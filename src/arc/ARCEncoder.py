@@ -374,8 +374,7 @@ class MultiTaskEncoder(L.LightningModule):
                 task_specific_gradient = torch.autograd.grad(
                     task_sensitive_loss[idx],
                     parameter,
-                    allow_unused=True,
-                    retain_graph=not is_last
+                    allow_unused=True
                 )[0]
 
                 if task_specific_gradient is None:
