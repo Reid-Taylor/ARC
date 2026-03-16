@@ -206,7 +206,7 @@ class Encoder(torch.nn.Module):
         """
         output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
         for idx in range(self.num_layers):
-            attended = self.msa(self.layer_norm(output)) + output
+            attended = self.msa[idx](self.layer_norm(output)) + output
             output = self.mlp[idx](self.layer_norm(attended)) + attended
 
         output:Float[torch.Tensor, "batch_size 1 D"] = self.layer_norm(output[:,0,:])
