@@ -1,14 +1,15 @@
 [model]
 [model.shared]
-latent_size = 600
+latent_size = 256
 patch_len = 5
 transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
 n_heads = 10
-n_layers = 6
+n_layers = 4
 learning_rate = 0.001
 tau = 0.8
+chi = 0.8
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9

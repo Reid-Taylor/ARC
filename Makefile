@@ -1,5 +1,5 @@
-GCP_ZONE ?= us-east4-a
-VM_INSTANCE_NAME ?= arc-training-v2
+GCP_ZONE ?= us-central1-f
+VM_INSTANCE_NAME ?= instance-20260316-001758
 MACHINE_TYPE ?= e2-highmem-4
 DISK_SIZE ?= 100GB
 

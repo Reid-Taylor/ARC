@@ -108,6 +108,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
         },
         learning_rate=learning_rate,
         tau=config['model']['encoder']['tau'],
+        chi=config['model']['encoder']['chi'],
         **{
             "PreProcessor": {
                 "patch_len": shared_model_config['patch_len'],

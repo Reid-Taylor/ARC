@@ -19,6 +19,7 @@ class MultiTaskEncoder(L.LightningModule):
             task_type: Dict[str, str], 
             learning_rate:float=1e-3, 
             tau:float=0.85,
+            chi:float=0.95,
             **network_dimensions
         ) -> None:
         super().__init__()
@@ -80,7 +81,7 @@ class MultiTaskEncoder(L.LightningModule):
                 augmentation_vector = torch.randn(
                         network_dimensions['Encoder'].get("dim_model",1),
                         requires_grad=True
-                    )
+                    ).reshape(1,-1)
                 self.augmentation_representations[key] = augmentation_vector
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
@@ -103,7 +104,7 @@ class MultiTaskEncoder(L.LightningModule):
         
         self.lr: float = learning_rate
         self.tau:float = tau
-        self.chi = 0.9
+        self.chi:float = chi
 
         self.automatic_optimization: bool = False
 
