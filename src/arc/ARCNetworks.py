@@ -279,7 +279,7 @@ class Decoder(torch.nn.Module):
     def __init__(self, input_size:int=64, num_layers:int=6, output_size:int=30*30):
         super().__init__()
 
-        self.mlp = MLP(num_layers, input_size, use_bias=True)
+        self.mlp = MLP(num_layers=4, dim_model=input_size, use_bias=True)
         self.fc = FullyConnectedLayer(input_size, output_size*11, activation="identity")
 
     def forward(self, x:Float[torch.Tensor, "batch_size dim_model"]) -> Float[torch.Tensor, "batch_size 900 11"]:

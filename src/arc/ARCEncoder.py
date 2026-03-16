@@ -81,7 +81,7 @@ class MultiTaskEncoder(L.LightningModule):
                 augmentation_vector = torch.randn(
                         network_dimensions['Encoder'].get("dim_model",1),
                         requires_grad=True
-                    ).reshape(1,-1) * 10
+                    ).reshape(1,-1) * 0.5
                 self.augmentation_representations[key] = augmentation_vector
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
@@ -242,6 +242,35 @@ class MultiTaskEncoder(L.LightningModule):
 
         return loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
+    def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
+        for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
+            task_specific_gradient = torch.autograd.grad(
+                loss[idx],
+                parameter,
+                allow_unused=True
+            )
+
+            if task_specific_gradient is None:
+                continue
+
+            self._aug_grads = getattr(self, '_aug_grads', {})
+            self._aug_grads[key] = task_specific_gradient.detach()
+
+        for key, parameter in self.augmentation_representations.items():
+            grad = self._aug_grads.get(key)
+            if grad is None:
+                continue
+
+            with torch.no_grad():
+                new_parameter = (
+                    (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
+                )
+                new_parameter = torch.clamp(new_parameter, min=0.075)
+
+            self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
+
+        del self._aug_grads
+    
     def training_step(self, batch):
         opt_model = self.optimizers()
         all_params = self._get_parameters()
@@ -321,8 +350,10 @@ class MultiTaskEncoder(L.LightningModule):
 
             start_idx = 0
             for param, size, shape in zip(shared_params, param_sizes, param_shapes):
-                param_grad = final_gradient[start_idx:start_idx + size].reshape(shape)
-                param.grad = param_grad
+                if param.grad is None:
+                    param.grad = final_gradient[start_idx:start_idx + size].reshape(shape)
+                else:
+                    param.grad += final_gradient[start_idx:start_idx + size].reshape(shape)
                 start_idx += size
 
         task_gradients = _get_task_gradients()
@@ -367,35 +398,11 @@ class MultiTaskEncoder(L.LightningModule):
 
         opt_model.step()
 
-        embedding_learning_rate = self.chi**self.current_epoch
+        embedding_learning_rate = 0.0
 
-        for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
-            task_specific_gradient = torch.autograd.grad(
-                task_sensitive_loss[idx],
-                parameter,
-                allow_unused=True
-            )[0]
-
-            if task_specific_gradient is None:
-                continue
-
-            self._aug_grads = getattr(self, '_aug_grads', {})
-            self._aug_grads[key] = task_specific_gradient.detach()
-
-        for key, parameter in self.augmentation_representations.items():
-            grad = self._aug_grads.get(key)
-            if grad is None:
-                continue
-
-            with torch.no_grad():
-                new_parameter = (
-                    (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
-                )
-                new_parameter = torch.clamp(new_parameter, min=0.25)
-
-            self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
-
-        del self._aug_grads
+        if self.current_epoch > 100:
+            embedding_learning_rate = self.chi**(self.current_epoch-80)
+            self.adjust_transformation_embeddings(embedding_learning_rate, task_sensitive_loss)
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
