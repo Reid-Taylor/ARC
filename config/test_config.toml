@@ -17,9 +17,9 @@ alpha = 0.9
 grid_size = {n_heads=2, output_sizes=[2, 30]}
 num_colors = {n_heads=2, output_sizes=[1, 10]}
 [model.encoder.contrastive_attributes]
-roll = {hidden_sizes=[4, 8], task_type = "task_sensitive"}
-scale_grid = {hidden_sizes=[4, 8], task_type = "task_sensitive"}
-isolate_color = {hidden_sizes=[4, 8], task_type = "task_sensitive"}
+roll = {task_type = "task_sensitive"}
+scale_grid = {task_type = "task_sensitive"}
+isolate_color = {task_type = "task_sensitive"}
 rotate = {task_type = "task_insensitive"}
 reflect = {task_type = "task_insensitive"}
 color_map = {task_type = "task_insensitive"}
