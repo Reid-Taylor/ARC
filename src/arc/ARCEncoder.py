@@ -81,7 +81,7 @@ class MultiTaskEncoder(L.LightningModule):
                 augmentation_vector = torch.randn(
                         network_dimensions['Encoder'].get("dim_model",1),
                         requires_grad=True
-                    ).reshape(1,-1)
+                    ).reshape(1,-1) * 10
                 self.augmentation_representations[key] = augmentation_vector
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
@@ -215,6 +215,7 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.augmentation_representations.keys():
             repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
             repr_true = self.augmentation_representations[key]
+            repr_true = repr_true.expand_as(repr_diff)
             mse = F.mse_loss(repr_diff, repr_true)
             task_sensitive_loss.append(mse)
 
@@ -368,35 +369,32 @@ class MultiTaskEncoder(L.LightningModule):
 
         embedding_learning_rate = self.chi**self.current_epoch
 
-        if embedding_learning_rate > 0.05:
-            num_aug = len(self.augmentation_representations)
-            for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
-                is_last = (idx == num_aug - 1)
-                task_specific_gradient = torch.autograd.grad(
-                    task_sensitive_loss[idx],
-                    parameter,
-                    allow_unused=True
-                )[0]
+        for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
+            task_specific_gradient = torch.autograd.grad(
+                task_sensitive_loss[idx],
+                parameter,
+                allow_unused=True
+            )[0]
 
-                if task_specific_gradient is None:
-                    continue
+            if task_specific_gradient is None:
+                continue
 
-                self._aug_grads = getattr(self, '_aug_grads', {})
-                self._aug_grads[key] = task_specific_gradient.detach()
+            self._aug_grads = getattr(self, '_aug_grads', {})
+            self._aug_grads[key] = task_specific_gradient.detach()
 
-            for key, parameter in self.augmentation_representations.items():
-                grad = self._aug_grads.get(key)
-                if grad is None:
-                    continue
+        for key, parameter in self.augmentation_representations.items():
+            grad = self._aug_grads.get(key)
+            if grad is None:
+                continue
 
-                with torch.no_grad():
-                    new_parameter = (
-                        (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
-                    )
+            with torch.no_grad():
+                new_parameter = (
+                    (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
+                )
 
-                self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
+            self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
 
-            del self._aug_grads
+        del self._aug_grads
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
