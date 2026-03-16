@@ -203,6 +203,8 @@ class Encoder(torch.nn.Module):
         In parallel to ViT's architecture, we want to construct k heads, with each fed their own W,K,V projections into subspace D_h. From here, we then produce and return a isomorphic projection of the concatenated outputs. We add no bias at any point in this structure.
 
         We implement residual layers for each transformation, alternating MLPs and MSAs, with pre-op LayerNorms in line with ViT.
+
+        #TODO Consider adding in an extran transformation in the output to ensure that the norm of the returned embedding is of a set magnitude, or of a minimum magnitude
         """
         output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
 

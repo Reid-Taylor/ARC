@@ -216,6 +216,7 @@ class MultiTaskEncoder(L.LightningModule):
             repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
             repr_true = self.augmentation_representations[key]
             repr_true = repr_true.expand_as(repr_diff)
+            repr_true = repr_true * batch[f'presence:{key}'].unsqueeze(dim=-1)
             mse = F.mse_loss(repr_diff, repr_true)
             task_sensitive_loss.append(mse)
 

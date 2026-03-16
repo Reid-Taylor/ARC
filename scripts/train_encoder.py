@@ -196,7 +196,7 @@ def setup_trainer(
         devices=devices,
         log_every_n_steps=1,
         # val_check_interval=0.25,
-        check_val_every_n_epoch=20,
+        check_val_every_n_epoch=3,
         enable_progress_bar=True,
         enable_model_summary=True
     )
