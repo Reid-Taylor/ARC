@@ -26,7 +26,7 @@ class PreProcessor(torch.nn.Module):
         self.positional_encoding:Float[torch.Tensor, "seq_len dim_model"] = self.pos_encoding(
             position=self.sequence_length, 
             d_model=self.dim_model
-        ).reshape(1, self.sequence_length, self.p**2)
+        )
     
     @beartype
     def forward(self, padded_grid:Float[torch.Tensor, "batch_size 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
