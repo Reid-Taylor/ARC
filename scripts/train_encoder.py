@@ -133,13 +133,6 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                 "output_size": shared_model_config['latent_size'],
                 "activation": "identity"
             },
-            "Attribute Detector": {
-                key: {
-                    "input_size": shared_model_config['latent_size'],
-                    "hidden_sizes": contrastive_attributes_config[key]['hidden_sizes']
-                } for key in contrastive_attributes_config.keys()
-                if contrastive_attributes_config[key]['task_type']=="task_sensitive"
-            },
             "Attribute Predictor": {
                 key: {
                     "input_size": shared_model_config['latent_size'],
