@@ -194,7 +194,7 @@ class Encoder(torch.nn.Module):
         self.num_layers = num_layers
         self.dim_model = dim_model
         
-        self.mlp = [MLP(dim_model=self.dim_model) for _ in range(self.num_layers)]
+        self.mlp = [MLP(dim_model=self.dim_model, use_bias=True) for _ in range(self.num_layers)]
         self.layer_norm = torch.nn.LayerNorm(self.dim_model)
         self.msa = [MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)]
 
@@ -205,6 +205,7 @@ class Encoder(torch.nn.Module):
         We implement residual layers for each transformation, alternating MLPs and MSAs, with pre-op LayerNorms in line with ViT.
         """
         output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
+
         for idx in range(self.num_layers):
             attended = self.msa[idx](self.layer_norm(output)) + output
             output = self.mlp[idx](self.layer_norm(attended)) + attended
