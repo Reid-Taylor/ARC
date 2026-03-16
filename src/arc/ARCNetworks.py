@@ -78,9 +78,9 @@ class SelfAttentionHead(torch.nn.Module):
         self.dim_latent_space = dim_latent_space
         self.dim_model = dim_model
 
-        self.W_query:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model,bias=False)
-        self.W_key:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model,bias=False)
-        self.W_value:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model,bias=False)
+        self.W_query:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model, bias=False)
+        self.W_key:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model, bias=False)
+        self.W_value:Float[torch.Tensor, "dim_model head_dim"] = torch.nn.Linear(self.dim_latent_space, self.dim_model, bias=False)
 
     def forward(self, X:Float[torch.Tensor, "batch_size seq_len dim_model"]):
         """
@@ -194,9 +194,9 @@ class Encoder(torch.nn.Module):
         self.num_layers = num_layers
         self.dim_model = dim_model
         
-        self.mlp = MLP(dim_model=self.dim_model)
+        self.mlp = [MLP(dim_model=self.dim_model) for _ in range(self.num_layers)]
         self.layer_norm = torch.nn.LayerNorm(self.dim_model)
-        self.msa = MSA(self.n_heads, self.dim_model)
+        self.msa = [MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)]
 
     def forward(self, processed_grid_repr):
         """
@@ -205,9 +205,9 @@ class Encoder(torch.nn.Module):
         We implement residual layers for each transformation, alternating MLPs and MSAs, with pre-op LayerNorms in line with ViT.
         """
         output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
-        for _ in range(self.num_layers):
+        for idx in range(self.num_layers):
             attended = self.msa(self.layer_norm(output)) + output
-            output = self.mlp(self.layer_norm(attended)) + attended
+            output = self.mlp[idx](self.layer_norm(attended)) + attended
 
         output:Float[torch.Tensor, "batch_size 1 D"] = self.layer_norm(output[:,0,:])
 
