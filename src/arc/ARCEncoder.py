@@ -22,6 +22,9 @@ class MultiTaskEncoder(L.LightningModule):
             chi:float=0.95,
             **network_dimensions
         ) -> None:
+        """
+        Having thus constructed the module to learn the vector space representation of a specific transformation, we should consider "in-housing" the transformation space projector. This does not require a different projection beyond the embedding's latent space--indeed, we hypothesize there will be greater performance achieved by the model if it learns to create embeddings which inherently respect the rules required by the theorized transformation space projection model. This should be implemented as a contrastive learning objective in the same manner as self.adjust_transformation_embeddings().
+        """
         super().__init__()
 
         self.preprocessor = TensorDictModule(
@@ -249,7 +252,7 @@ class MultiTaskEncoder(L.LightningModule):
                 loss[idx],
                 parameter,
                 allow_unused=True
-            )
+            )[0]
 
             if task_specific_gradient is None:
                 continue
@@ -401,8 +404,8 @@ class MultiTaskEncoder(L.LightningModule):
 
         embedding_learning_rate = 0.0
 
-        if self.current_epoch > 100:
-            embedding_learning_rate = self.chi**(self.current_epoch-80)
+        if self.current_epoch > 20:
+            embedding_learning_rate = self.chi**(self.current_epoch)
             self.adjust_transformation_embeddings(embedding_learning_rate, task_sensitive_loss)
 
         for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
