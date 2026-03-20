@@ -1,21 +1,21 @@
 [model]
 [model.shared]
-latent_size = 90
-patch_len = 5
-transformation_dimension_size = 10
+latent_size = 384
+patch_len = 3
+transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
-n_heads = 10
-n_layers = 1
-learning_rate = 0.0075
+n_heads = 32
+n_layers = 20
+learning_rate = 0.001
 tau = 0.85
-chi=0.85
+chi = 0.95
 [model.transformer]
 learning_rate = 0.001
 alpha = 0.9
 [model.encoder.downstream_attributes]
-grid_size = {n_heads=2, output_sizes=[2, 30]}
-num_colors = {n_heads=2, output_sizes=[1, 10]}
+grid_size = {n_heads=4, output_sizes=[2, 30]}
+num_colors = {n_heads=4, output_sizes=[1, 10]}
 [model.encoder.contrastive_attributes]
 roll = {task_type = "task_sensitive"}
 scale_grid = {task_type = "task_sensitive"}
@@ -28,8 +28,8 @@ color_map = {task_type = "task_insensitive"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 100
-epochs = 20
+batch_size = 15
+epochs = 5
 [training.transformer]
-batch_size = 10
-epochs = 2
+batch_size = 1
+epochs = 1
