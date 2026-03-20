@@ -1,4 +1,4 @@
-GCP_ZONE ?= us-central1-f
+GCP_ZONE ?= us-central1-c
 VM_INSTANCE_NAME ?= instance-20260320-023015
 MACHINE_TYPE ?= e2-highmem-4
 DISK_SIZE ?= 100GB
