@@ -28,7 +28,7 @@ color_map = {task_type = "task_insensitive"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 196
+batch_size = 150
 epochs = 5000
 [training.transformer]
 batch_size = 1
