@@ -247,33 +247,30 @@ class MultiTaskEncoder(L.LightningModule):
         return loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
+
+        repl_augmentations = {}
+
         for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
-            task_specific_gradient = torch.autograd.grad(
+            task_specific_gradient:tuple[torch.Tensor] = torch.autograd.grad(
                 loss[idx],
                 parameter,
                 allow_unused=True
-            )[0]
+            )
 
-            if task_specific_gradient is None:
+            if task_specific_gradient is None or task_specific_gradient[0] is None:
                 continue
 
-            self._aug_grads = getattr(self, '_aug_grads', {})
-            self._aug_grads[key] = task_specific_gradient.detach()
-
-        for key, parameter in self.augmentation_representations.items():
-            grad = self._aug_grads.get(key)
-            if grad is None:
-                continue
+            grad = task_specific_gradient[0].detach()
 
             with torch.no_grad():
-                new_parameter = (
-                    (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
-                )
+                new_parameter =  (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
                 new_parameter = torch.clamp(new_parameter, min=0.075)
 
-            self.augmentation_representations[key] = new_parameter.detach().requires_grad_(True)
+            repl_value:torch.Tensor = new_parameter.detach()
+            repl_value.requires_grad_(True)
+            repl_augmentations[key] = repl_value
 
-        del self._aug_grads
+        self.augmentation_representations = repl_augmentations
     
     def training_step(self, batch):
         opt_model = self.optimizers()
