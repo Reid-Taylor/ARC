@@ -20,6 +20,7 @@ class MultiTaskEncoder(L.LightningModule):
             learning_rate:float=1e-3, 
             tau:float=0.85,
             chi:float=0.95,
+            activation:int=20,
             **network_dimensions
         ) -> None:
         """
@@ -105,6 +106,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.augmentation_representations) + len(self.task_agnostics) + 1
         
+        self.transformation_embeddings_activation = activation
         self.lr: float = learning_rate
         self.tau:float = tau
         self.chi:float = chi
@@ -401,7 +403,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         embedding_learning_rate = 0.0
 
-        if self.current_epoch > 20:
+        if self.current_epoch >= self.transformation_embeddings_activation:
             embedding_learning_rate = self.chi**(self.current_epoch)
             self.adjust_transformation_embeddings(embedding_learning_rate, task_sensitive_loss)
 
