@@ -23,10 +23,10 @@ class PreProcessor(torch.nn.Module):
             bias=False
         )
 
-        self.positional_encoding:Float[torch.Tensor, "seq_len dim_model"] = self.pos_encoding(
+        self.register_buffer('positional_encoding', self.pos_encoding(
             position=self.sequence_length, 
             d_model=self.dim_model
-        )
+        ))
     
     @beartype
     def forward(self, padded_grid:Float[torch.Tensor, "batch_size 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
@@ -40,9 +40,9 @@ class PreProcessor(torch.nn.Module):
         assert seq_len + 1 == self.sequence_length, f"Incorrect data shapes, PreProcessor Sequence Length {self.sequence_length} and {seq_len + 1}"
 
         patches:Float[torch.Tensor, "batch_size initial_sequence dim_model"] = padded_grid.reshape((batch_size, seq_len, self.p**2))
-        class_tokens = torch.zeros(batch_size, 1, self.p**2)
+        class_tokens = torch.zeros(batch_size, 1, self.p**2, device=padded_grid.device)
 
-        patches = torch.cat((class_tokens, patches), axis=1)
+        patches = torch.cat((class_tokens, patches), dim=1)
 
         result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) + self.positional_encoding
 
@@ -135,13 +135,13 @@ class MSA(torch.nn.Module):
         self.dim_model = dim_model
         assert self.dim_model % self.num_heads == 0, f"MHA Dimension Error: Dimension of {self.dim_model} with {self.num_heads} heads"
 
-        self.heads = [
+        self.heads = torch.nn.ModuleList([
             SelfAttentionHead(
                 dim_latent_space=self.dim_model, 
                 dim_model=self.dim_model//self.num_heads
             ) 
             for _ in range(self.num_heads)
-        ]
+        ])
 
     @beartype
     def forward(self, X:Float[torch.Tensor, "batch_size seq_len dim_model"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
@@ -171,13 +171,13 @@ class MLP(torch.nn.Module):
         self.dim_model = dim_model
         self.activation_function = activation_function
         self.use_bias = use_bias
-        self.layers = [
+        self.layers = torch.nn.ModuleList([
             torch.nn.Linear(
                 self.dim_model, 
                 self.dim_model, 
                 bias=self.use_bias
             ) for _ in range(self.num_layers)
-        ]
+        ])
 
     def forward(self,input):
         output=input
@@ -194,9 +194,9 @@ class Encoder(torch.nn.Module):
         self.num_layers = num_layers
         self.dim_model = dim_model
         
-        self.mlp = [MLP(dim_model=self.dim_model, use_bias=True) for _ in range(self.num_layers)]
+        self.mlp = torch.nn.ModuleList([MLP(dim_model=self.dim_model, use_bias=True) for _ in range(self.num_layers)])
         self.layer_norm = torch.nn.LayerNorm(self.dim_model)
-        self.msa = [MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)]
+        self.msa = torch.nn.ModuleList([MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)])
 
     def forward(self, processed_grid_repr):
         """

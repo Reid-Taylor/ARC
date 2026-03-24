@@ -78,15 +78,14 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.task_agnostics: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
-        self.augmentation_representations = {}
+        self.augmentation_representations = torch.nn.ParameterDict()
 
         for key, value in task_type.items():
             if value == "task_sensitive":
                 augmentation_vector = torch.randn(
                         network_dimensions['Encoder'].get("dim_model",1),
-                        requires_grad=True
                     ).reshape(1,-1) * 0.5
-                self.augmentation_representations[key] = augmentation_vector
+                self.augmentation_representations[key] = torch.nn.Parameter(augmentation_vector)
             elif value =="task_insensitive":
                 self.task_agnostics.append(key)
             else: 
@@ -125,10 +124,35 @@ class MultiTaskEncoder(L.LightningModule):
                 key: [p for p in getattr(self, f"attribute:{key}").module.parameters() if p.requires_grad]
                 for key in self.downstream_attributes
             },
-            "transformation_representations": [value for value in self.augmentation_representations.values()]
+            "transformation_representations": [p for p in self.augmentation_representations.parameters()]
         }
         return params
         
+    def _forward_pass(self, grid_1, grid_2) -> Dict[str, torch.Tensor]:
+        """
+        This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results
+        """
+        results_dict = {}
+
+        results_dict['grid:encoded_original'] = grid_1
+        results_dict['grid:encoded_augmentation'] = grid_2
+
+        results_dict['embedding:original'] = self.online_encoder(grid_1)
+        results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
+        results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
+
+        results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
+        results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
+        results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
+
+        for attribute in self.downstream_attributes:
+            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
+
+        for task in self.augmentation_representations.keys():
+            results_dict[f'detection:{task}'] = results_dict['embedding:augmentation'] - results_dict['embedding:original']
+
+        return results_dict
+
     def forward(self, x) -> Dict[str, Dict[str, Float[torch.Tensor, "..."]]]:
         """
         We call the forward pass twice, once with the original and augmentation, and then with the augmentation and the original
@@ -138,33 +162,8 @@ class MultiTaskEncoder(L.LightningModule):
         original_encoding = self.preprocessor(x['grid:padded_original'])
         augmentation_encoding = self.preprocessor(x['grid:padded_augmentation'])
 
-        def forward_pass(grid_1, grid_2) -> Dict[str, torch.Tensor]:
-            """
-            This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results
-            """
-            results_dict = {}
-
-            results_dict['grid:encoded_original'] = grid_1
-            results_dict['grid:encoded_augmentation'] = grid_2
-
-            results_dict['embedding:original'] = self.online_encoder(grid_1)
-            results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
-            results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
-
-            results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
-            results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
-            results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
-
-            for attribute in self.downstream_attributes:
-                results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
-
-            for task in self.augmentation_representations.keys():
-                results_dict[f'detection:{task}'] = results_dict['embedding:augmentation'] - results_dict['embedding:original']
-
-            return results_dict
-
-        results["standard"] = forward_pass(original_encoding, augmentation_encoding)
-        results["mirrored"] = forward_pass(augmentation_encoding, original_encoding)
+        results["standard"] = self._forward_pass(original_encoding, augmentation_encoding)
+        results["mirrored"] = self._forward_pass(augmentation_encoding, original_encoding)
 
         return results
     
@@ -237,20 +236,19 @@ class MultiTaskEncoder(L.LightningModule):
                     )
                 )
             else: 
-                task_invariant_loss.append(torch.tensor(0,dtype=torch.float32))
+                task_invariant_loss.append(torch.zeros(1, device=pred_standard.device).squeeze())
 
-        variable_embedding_loss = torch.tensor(0,dtype=torch.float32)
+        embedding_loss_terms = []
         for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-            variable_embedding_loss += loss_function(results["standard"]["embedding:original"])
-            variable_embedding_loss += loss_function(results["mirrored"]["embedding:original"])
+            embedding_loss_terms.append(loss_function(results["standard"]["embedding:original"]))
+            embedding_loss_terms.append(loss_function(results["mirrored"]["embedding:original"]))
+        variable_embedding_loss = torch.stack(embedding_loss_terms).sum()
 
         loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         return loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
-
-        repl_augmentations = {}
 
         for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
             task_specific_gradient:tuple[torch.Tensor] = torch.autograd.grad(
@@ -265,14 +263,9 @@ class MultiTaskEncoder(L.LightningModule):
             grad = task_specific_gradient[0].detach()
 
             with torch.no_grad():
-                new_parameter =  (1 - embedding_learning_rate) * parameter.detach() - embedding_learning_rate * grad
-                new_parameter = torch.clamp(new_parameter, min=0.075)
-
-            repl_value:torch.Tensor = new_parameter.detach()
-            repl_value.requires_grad_(True)
-            repl_augmentations[key] = repl_value
-
-        self.augmentation_representations = repl_augmentations
+                new_value = (1 - embedding_learning_rate) * parameter.data - embedding_learning_rate * grad
+                new_value = torch.clamp(new_value, min=0.075)
+                parameter.data.copy_(new_value)
     
     def training_step(self, batch):
         opt_model = self.optimizers()
@@ -289,7 +282,6 @@ class MultiTaskEncoder(L.LightningModule):
             shared_params = all_params['online_encoder']
 
             for task_idx in range(self.num_tasks):
-                
                 task_loss = loss[task_idx]
                 task_grads = torch.autograd.grad(
                     task_loss, 
@@ -302,7 +294,7 @@ class MultiTaskEncoder(L.LightningModule):
                 flattened_grads = []
                 for grad in task_grads:
                     if grad is not None:
-                        flattened_grads.append(grad.flatten())
+                        flattened_grads.append(grad.detach().flatten())
                     else:
                         flattened_grads.append(torch.zeros(1, device=loss.device))
 
@@ -371,14 +363,17 @@ class MultiTaskEncoder(L.LightningModule):
             all_params["online_predictor"]
         )
 
-        non_shared_loss = reconstruction_loss + torch.stack(task_invariant_loss).sum() if task_invariant_loss else 0
+        non_shared_loss = reconstruction_loss + torch.stack(task_invariant_loss).sum() if task_invariant_loss else reconstruction_loss
+
+        num_attribute_tasks = len(all_params['attribute_predictors'])
+        needs_retain = num_attribute_tasks > 0
 
         if len(non_shared_params) > 0:
             non_shared_gradients = torch.autograd.grad(
                 non_shared_loss,
                 non_shared_params,
                 allow_unused=True,
-                retain_graph=True
+                retain_graph=needs_retain
             )
 
             for param, grad in zip(non_shared_params, non_shared_gradients):
@@ -386,11 +381,13 @@ class MultiTaskEncoder(L.LightningModule):
                     param.grad = grad
 
         for idx, (key, parameter_list) in enumerate(all_params['attribute_predictors'].items()):
+            is_last = (idx == num_attribute_tasks - 1)
             if len(parameter_list) > 0:
                 task_specific_gradients = torch.autograd.grad(
                     downstream_attribute_loss[idx],
                     parameter_list,
-                    allow_unused=True
+                    allow_unused=True,
+                    retain_graph=not is_last
                 )
                 
                 for param, grad in zip(parameter_list, task_specific_gradients):
@@ -417,12 +414,12 @@ class MultiTaskEncoder(L.LightningModule):
             "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach()),
             "train/Transformation Map MSE": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
             "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
-            "train/Anti Sparsity Loss": variable_embedding_loss,
+            "train/Anti Sparsity Loss": variable_embedding_loss.detach(),
             "train/Embedding LR": embedding_learning_rate
         }
         
-        for key, loss in zip(self.downstream_attributes,downstream_attribute_loss):
-            log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss)
+        for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
+            log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss_val.detach())
         
         log_dict["train/Surgery Ratio"] = self.conflict_ratio
         

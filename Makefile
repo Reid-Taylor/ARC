@@ -1,7 +1,7 @@
-GCP_ZONE ?= us-central1-c
-VM_INSTANCE_NAME ?= instance-20260320-023015
-MACHINE_TYPE ?= e2-highmem-4
-DISK_SIZE ?= 100GB
+GCP_ZONE ?= us-central1-f
+VM_INSTANCE_NAME ?= instance-20260322-224233
+MACHINE_TYPE ?= e2-highmem-128
+DISK_SIZE ?= 120GB
 
 # Training parameters
 DATASET_PATH ?= training

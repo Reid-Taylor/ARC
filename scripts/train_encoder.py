@@ -57,7 +57,9 @@ def create_dataloader(config: Dict[str, Any]):
         for key in keys:
             values = [grid_dict[key] for grid_dict in all_grids]
             
-            if isinstance(values[0], torch.Tensor):
+            if values[0] is None:
+                continue
+            elif isinstance(values[0], torch.Tensor):
                 batched_dict[key] = torch.cat(values, dim=0)
             elif isinstance(values[0], str):
                 batched_dict[key] = values
@@ -66,9 +68,11 @@ def create_dataloader(config: Dict[str, Any]):
             else:
                 batched_dict[key] = values
 
+        del all_grids
+
         return TensorDict(
             batched_dict,
-            batch_size=len(all_grids),
+            batch_size=batched_dict[next(k for k in keys if isinstance(batched_dict.get(k), torch.Tensor))].shape[0],
             device=get_device()
         )
     
