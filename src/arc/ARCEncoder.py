@@ -218,7 +218,7 @@ class MultiTaskEncoder(L.LightningModule):
         task_sensitive_loss = []
         for key in self.augmentation_representations.keys():
             repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
-            repr_true = self.augmentation_representations[key]
+            repr_true:torch.Tensor = self.augmentation_representations[key]
             repr_true = repr_true.expand_as(repr_diff)
             repr_true = repr_true * batch[f'presence:{key}'].unsqueeze(dim=-1)
             mse = F.mse_loss(repr_diff, repr_true)
