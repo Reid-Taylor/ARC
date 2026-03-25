@@ -189,6 +189,47 @@ class MultiTaskEncoder(L.LightningModule):
                            List[torch.Tensor], 
                            torch.Tensor
                         ]:
+        
+        results
+        """
+        results = dict{
+            f'key':{
+                "example:0:input": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "example:0:output": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "example:1:input": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "example:1:output": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "example:2:input": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "example:2:output": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "challenge": {
+                    "standard": results,
+                    "mirrored: results
+                },
+                "solution": {
+                    "standard": results,
+                    "mirrored: results
+                },
+            }
+        }
+        """
+
         # TODO run through here and add in congruent distance measurements per problem set
         pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
         pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
@@ -429,13 +470,13 @@ class MultiTaskEncoder(L.LightningModule):
             "train/Transformation Map MSE": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
             "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
             "train/Anti Sparsity Loss": variable_embedding_loss.detach(),
-            "train/Embedding LR": embedding_learning_rate
+            "metric/Embedding LR": embedding_learning_rate
         }
         
         for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
             log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss_val.detach())
         
-        log_dict["train/Surgery Ratio"] = self.conflict_ratio
+        log_dict["metric/Surgery Ratio"] = self.conflict_ratio
         
         self.log_dict(log_dict, prog_bar=True)
 
