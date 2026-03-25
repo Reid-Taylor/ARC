@@ -47,6 +47,7 @@ local-pressure-test:
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp \
 		--log-path ./logs/test/tmp
+
 local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	uv run scripts/train_encoder.py \
@@ -57,7 +58,7 @@ local-test-encoder:
 
 local-test-transformer:
 	@echo "Running local test of ARC Encoder training..."
-	uv run scripts/train_transformer.py \
+	uv run scripts/train_contrastive_encoder.py \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp \
 		--log-path ./logs/test/tmp

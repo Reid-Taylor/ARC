@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone training script for ARC Transformer that can be executed independently.
+Standalone training script for ARC Encoder that can be executed independently.
 """
 import argparse
 import sys
@@ -31,51 +31,50 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config
 from src.arc.ARCDataClasses import ARCProblemSet
-from src.arc.ARCTransformer import TransformationDescriber
+from src.arc.ARCContrastiveEncoder import MultiTaskEncoder
 
 
 def create_dataloader(config: Dict[str, Any]):
     dataset_path:str = config['training']['shared']['dataset_path']
-    batch_size:int = config['training']['transformer']['batch_size']
-    latent_size:int = config['model']['shared']['latent_size']
+    batch_size:int = config['training']['encoder']['batch_size']
     max_num_examples:int = 3
     
     problems = ARCProblemSet.load_from_data_directory(dataset_path)
+
     num_samples = len(problems)
     
     def collate_fn(batch):
-        names = [item["problem_name"] for item in batch]
+        collated = {}
+        for problem in batch:
+            grids = {}
 
-        inputs = torch.zeros(len(batch),latent_size,max_num_examples)
-        outputs = torch.zeros(len(batch),latent_size,max_num_examples)
+            for idx, example in enumerate(problem.examples):
+                if idx >= max_num_examples:
+                    break
+                for role in ("input", "output"):
+                    grid_dict = example[role].to_dict()
+                    tensor_data = {
+                        k: v for k, v in grid_dict.items()
+                        if v is not None and isinstance(v, torch.Tensor)
+                    }
+                    grids[f"example:{idx}:{role}"] = TensorDict(
+                        tensor_data, batch_size=1, device=get_device()
+                    )
 
-        for batch_idx, item in enumerate(batch):
-            examples_list = list(item['examples'].values())
-            num_examples = len(examples_list)
-            for idx in range(min(num_examples,3)):
-                inputs[batch_idx, :, idx] = examples_list[idx]['input'].embedding
-                outputs[batch_idx, :, idx] = examples_list[idx]['output'].embedding
+            for role, arc_grid in (("challenge", problem.challenge), ("solution", problem.solution)):
+                grid_dict = arc_grid.to_dict()
+                tensor_data = {
+                    k: v for k, v in grid_dict.items()
+                    if v is not None and isinstance(v, torch.Tensor)
+                }
+                grids[role] = TensorDict(
+                    tensor_data, batch_size=1, device=get_device()
+                )
 
-        challenge = torch.cat([item['challenge'].embedding for item in batch])
-        solution = torch.cat([item['solution'].embedding for item in batch])
+            grids["num_examples"] = min(len(problem.examples), max_num_examples)
+            collated[problem.name] = grids
 
-        return TensorDict(
-            {
-                "name": names,
-
-                "inputs":inputs,
-                "outputs":outputs,
-
-                "challenge":challenge,
-                "solution":solution,
-
-                "transformation_description":None
-            },
-            batch_size=len(batch),
-            device=get_device()
-        )
-    
-        #TODO Revamp the load tensordict to pull all embeddings, and other required information from the latest saved model's inference over the latest saved models' train and val sets, respectively
+        return collated
     
     train_dataloader = torch.utils.data.DataLoader(
         problems[:int(0.9*num_samples)],
@@ -97,19 +96,54 @@ def create_dataloader(config: Dict[str, Any]):
     return train_dataloader, val_dataloader
 
 
-def create_model(config: Dict[str, Any]) -> TransformationDescriber:
+def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
     """Create and initialize the model."""
+    encoder_config = config['model']['encoder']
+    downstream_attributes_config = config['model']['encoder']['downstream_attributes']
+    contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
-    learning_rate: float = config['model']['transformer']['learning_rate']
-    alpha: float = config['model']['transformer']['alpha']
-    
-    model = TransformationDescriber(
+    learning_rate: float = config['model']['encoder']['learning_rate']
+
+    model = MultiTaskEncoder(
+        attribute_requirements=list(downstream_attributes_config.keys()),
+        task_type={
+            key: val['task_type'] 
+            for key, val in contrastive_attributes_config.items()
+        },
         learning_rate=learning_rate,
-        alpha=alpha,
+        tau=config['model']['encoder']['tau'],
+        chi=config['model']['encoder']['chi'],
+        activation=config['model']['encoder']['activation'],        
         **{
-            "TransformationDescriber": {
+            "PreProcessor": {
+                "patch_len": shared_model_config['patch_len'],
+                "dim_model": shared_model_config['latent_size']
+            },
+            "Encoder": {
+                "n_heads": encoder_config['n_heads'],
+                "num_layers": encoder_config['n_layers'],
+                "dim_model": shared_model_config['latent_size']
+            },
+            "Decoder": {
                 "input_size": shared_model_config['latent_size'],
-                "output_size": shared_model_config['transformation_dimension_size']
+                "num_layers": encoder_config['n_layers'],
+                "output_size": encoder_config['grid_size']
+            },
+            "Contrastive Projection": {
+                "input_size": shared_model_config['latent_size'],
+                "output_size": shared_model_config['latent_size']
+            },
+            "Contrastive Predictor": {
+                "input_size": shared_model_config['latent_size'],
+                "output_size": shared_model_config['latent_size'],
+                "activation": "identity"
+            },
+            "Attribute Predictor": {
+                key: {
+                    "input_size": shared_model_config['latent_size'],
+                    "n_heads": downstream_attributes_config[key]['n_heads'],
+                    "output_sizes": downstream_attributes_config[key]['output_sizes']
+                } for key in downstream_attributes_config.keys()
             },
         }
     ).to(get_device())
@@ -139,7 +173,7 @@ def setup_trainer(
     
     early_stopping = EarlyStopping(
         monitor="val/val_loss",
-        patience=4,
+        patience=5,
         mode="min"
     )
     
@@ -159,8 +193,7 @@ def setup_trainer(
         accelerator=accelerator,
         devices=devices,
         log_every_n_steps=1,
-        # val_check_interval=0.25,
-        check_val_every_n_epoch=10,
+        check_val_every_n_epoch=3,
         enable_progress_bar=True,
         enable_model_summary=True
     )
