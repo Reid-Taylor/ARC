@@ -120,8 +120,7 @@ class SelfAttentionHead(torch.nn.Module):
         batch_size, seq_len, dim_model = key.shape
 
         attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
-        attention_output /= seq_len**0.5
-        # attention_output = F.softmax(attention_output,dim=1)
+        # attention_output /= seq_len**0.5
 
         return torch.einsum("bqq,bqd->bqd",attention_output, value)
 
@@ -287,39 +286,3 @@ class Decoder(torch.nn.Module):
         recreation:Float[torch.Tensor, "batch_size 900 11"] = self.fc(output).view(-1, 900, 11)
 
         return recreation
-
-@beartype
-class TransformationSpaceProjection(torch.nn.Module):
-    """
-    A custom module which will learn, from the concatenation of two embeddings, a description of what makes one into the other.
-    """
-    def __init__(self, input_size: int, output_size: int):
-        super().__init__()
-
-        self.reading_example_input = torch.nn.Linear(input_size, input_size * 2)
-        self.reading_example_output = torch.nn.Linear(input_size, input_size * 2)
-
-        self.concatenated_layer_map = torch.nn.Linear(input_size * 2, input_size * 2)
-
-        self.final_map = torch.nn.Linear(input_size * 2, output_size)
-
-    def forward(self, input_embedding:torch.Tensor, output_embedding:torch.Tensor):
-        input_as_query = F.softmax(self.reading_example_input(input_embedding), dim=-1)
-        output_as_query = F.softmax(self.reading_example_output(output_embedding), dim=-1)
-
-        input_concatenated = torch.cat((input_embedding, output_embedding), dim=-1).squeeze(dim=0)
-        input_concatenated_mapped = F.softmax(self.concatenated_layer_map(input_concatenated), dim=-1)
-
-        input_query_key = torch.matmul(input_as_query.transpose(-2,-1), input_concatenated_mapped)
-        output_query_key = torch.matmul(output_as_query.transpose(-2,-1), input_concatenated_mapped)
-
-        meta_attended = F.relu(torch.matmul(input_query_key, output_query_key.transpose(-2,-1)))
-
-        d_k = input_concatenated_mapped.size()[-1]
-        d_k_tensor = torch.tensor(d_k, dtype=torch.float32, device=input_concatenated_mapped.device)
-
-        result = torch.matmul(input_concatenated_mapped, meta_attended) / torch.sqrt(d_k_tensor)
-
-        result = torch.relu(self.final_map(result))
-
-        return result
