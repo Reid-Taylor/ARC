@@ -415,13 +415,13 @@ class MultiTaskEncoder(L.LightningModule):
             "train/Transformation Map MSE": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
             "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
             "train/Anti Sparsity Loss": variable_embedding_loss.detach(),
-            "train/Embedding LR": embedding_learning_rate
+            "metric/Embedding LR": embedding_learning_rate
         }
         
         for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
             log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss_val.detach())
         
-        log_dict["train/Surgery Ratio"] = self.conflict_ratio
+        log_dict["metric/Surgery Ratio"] = self.conflict_ratio
         
         self.log_dict(log_dict, prog_bar=True)
 
