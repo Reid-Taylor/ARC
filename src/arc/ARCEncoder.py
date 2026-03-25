@@ -7,9 +7,8 @@ from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor
-from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
+from src.arc.ARCUtils import anti_sparsity_loss
 from functools import partial
-import numpy as np
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
