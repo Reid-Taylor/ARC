@@ -121,7 +121,7 @@ class SelfAttentionHead(torch.nn.Module):
 
         attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
         attention_output /= seq_len**0.5
-        attention_output = F.softmax(attention_output,dim=1)
+        # attention_output = F.softmax(attention_output,dim=1)
 
         return torch.einsum("bqq,bqd->bqd",attention_output, value)
 
@@ -266,10 +266,6 @@ class AttributeHead(torch.nn.Module):
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
 
         final_layer = self.fc_out(x)
-
-        #?: Could it be that we should have 30 attention heads, each outputting 2 output dimension sizes? The attention heads are directly interpreted as each channel...
-        #?: Other case: 10 heads, each outputting 1 number. This could provide a more intuitive architecture in which we allow the attribute heads to attend over each color channel, or each grid size option.
-        #*: It appears that the attribute heads never advance past random guessing, at this point...
 
         return final_layer
 
