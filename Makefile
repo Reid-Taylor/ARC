@@ -38,14 +38,15 @@ train-encoder:
 		--config train_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/encoder \
-		--log-path ./logs/test
+		--log-path ./logs/test/encoder
 
 train-contrastive-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	uv run scripts/train_contrastive_encoder.py \
+		--config train_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/contrastive_encoder \
-		--log-path ./logs/test/tmp
+		--log-path ./logs/test/tmp/contrastive_encoder
 
 local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
@@ -53,14 +54,15 @@ local-test-encoder:
 		--config test_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp/encoder \
-		--log-path ./logs/test/tmp
+		--log-path ./logs/test/tmp/encoder
 
 local-test-contrastive-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	uv run scripts/train_contrastive_encoder.py \
+		--config test_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp/contrastive_encoder \
-		--log-path ./logs/test/tmp
+		--log-path ./logs/test/tmp/contrastive_encoder
 
 view-training:
 	tensorboard --logdir logs/test
