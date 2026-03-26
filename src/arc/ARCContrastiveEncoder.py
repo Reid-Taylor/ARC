@@ -178,7 +178,13 @@ class MultiTaskEncoder(L.LightningModule):
 
         return results
     
-    def _calculate_loss(self,results,batch):
+    def _calculate_loss(self,results,batch) -> tuple[
+        torch.Tensor,
+        list[torch.Tensor],
+        list[torch.Tensor],
+        list[torch.Tensor],
+        torch.Tensor
+    ]:
         pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
         pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
@@ -248,7 +254,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         return reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
-    def _calculate_comparative_loss(self, results, batch):
+    def _calculate_comparative_loss(self, results, batch) -> tuple[torch.Tensor, torch.Tensor]:
         """
         By accessing the embeddings located under each entries ['standard']['embedding:original'] keys, this method should compute a loss as measured by the deviation of each examples' input-output relationship, compared to the same of the other examples. 
 
@@ -283,16 +289,23 @@ class MultiTaskEncoder(L.LightningModule):
     def calculate_loss(self, 
                        results, 
                        batch):
+        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss, comparative_loss, prediction_loss = 0, None, None, None, 0, 0, 0
 
         for problem_id in list(results.keys()):
             for standard_grid_name in ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']:
                 if standard_grid_name not in results[problem_id]: 
                     continue
-                reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self._calculate_loss(results[problem_id][standard_grid_name], batch[problem_id][standard_grid_name])
+                reconstruction_loss_sample, downstream_attribute_loss_samples, task_sensitive_loss_samples, task_invariant_loss_samples, variable_embedding_loss_sample = self._calculate_loss(results[problem_id][standard_grid_name], batch[problem_id][standard_grid_name])
 
-            comparative_loss, prediction_loss = self._calculate_comparative_loss(results[problem_id], batch[problem_id])
+                downstream_attribute_loss = [x + y for x, y in zip(downstream_attribute_loss, downstream_attribute_loss_samples)] if downstream_attribute_loss is not None else downstream_attribute_loss_samples
+                task_sensitive_loss = [x + y for x, y in zip(task_sensitive_loss, task_sensitive_loss_samples)] if task_sensitive_loss is not None else task_sensitive_loss_samples
+                task_invariant_loss = [x + y for x, y in zip(task_invariant_loss, task_invariant_loss_samples)] if task_invariant_loss is not None else task_invariant_loss_samples
+                reconstruction_loss += reconstruction_loss_sample
+                variable_embedding_loss += variable_embedding_loss_sample
 
-        #TODO this needs to be additive, not assignative, at each iteration upon the loop
+            comparative_loss_sample, prediction_loss_sample = self._calculate_comparative_loss(results[problem_id], batch[problem_id])
+            comparative_loss += comparative_loss_sample
+            prediction_loss += prediction_loss_sample
 
         return comparative_loss, prediction_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
