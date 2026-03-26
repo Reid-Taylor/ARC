@@ -7,9 +7,8 @@ from torch.nn import functional as F
 from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor
-from src.arc.ARCUtils import entropy_density_loss, variance_density_loss, anti_sparsity_loss
+from src.arc.ARCUtils import anti_sparsity_loss
 from functools import partial
-import numpy as np
 
 @beartype
 class MultiTaskEncoder(L.LightningModule):
@@ -158,6 +157,9 @@ class MultiTaskEncoder(L.LightningModule):
         for grid_key in ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']:
             grid_results = {}
 
+            if grid_key not in x:
+                continue
+
             original_encoding = self.preprocessor(x[grid_key]['grid:padded_original'])
             augmentation_encoding = self.preprocessor(x[grid_key]['grid:padded_augmentation'])
 
@@ -169,9 +171,6 @@ class MultiTaskEncoder(L.LightningModule):
         return results
 
     def forward(self, x):
-        """
-        We call the forward pass twice, once with the original and augmentation, and then with the augmentation and the original
-        """
         results={}
 
         for k, v in x.items():
@@ -179,58 +178,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         return results
     
-    def calculate_loss(self, 
-                       results: Dict[str, Dict[str, Float[torch.Tensor, "..."]]], 
-                       batch) -> tuple[
-                           torch.Tensor,
-                           torch.Tensor, 
-                           List[torch.Tensor], 
-                           List[torch.Tensor], 
-                           List[torch.Tensor], 
-                           torch.Tensor
-                        ]:
-        
-        results
-        """
-        results = dict{
-            f'key':{
-                "example:0:input": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "example:0:output": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "example:1:input": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "example:1:output": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "example:2:input": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "example:2:output": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "challenge": {
-                    "standard": results,
-                    "mirrored: results
-                },
-                "solution": {
-                    "standard": results,
-                    "mirrored: results
-                },
-            }
-        }
-        """
-
-        # TODO run through here and add in congruent distance measurements per problem set
+    def _calculate_loss(self,results,batch):
         pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
         pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
@@ -298,9 +246,53 @@ class MultiTaskEncoder(L.LightningModule):
             embedding_loss_terms.append(loss_function(results["mirrored"]["embedding:original"]))
         variable_embedding_loss = torch.stack(embedding_loss_terms).sum()
 
-        loss = torch.stack([reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
+        return reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
-        return loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
+    def _calculate_comparative_loss(self, results, batch):
+        """
+        By accessing the embeddings located under each entries ['standard']['embedding:original'] keys, this method should compute a loss as measured by the deviation of each examples' input-output relationship, compared to the same of the other examples. 
+
+        Additionally, we should calculate a separate reconstruction loss as measured by the average distance delta summed to the challenge embedding, pulling a MSE between the resulting new vector, and the solution embedding vector.
+        """
+        input_embeddings = []
+        output_embeddings = []
+
+        # only access ['standard']['embedding:original'] for this comparative loss
+        for idx in range(3):
+            if f"example:{idx}:input" not in results:
+                continue
+
+            input_embeddings.append(results[f"example:{idx}:input"]['standard']['embedding:original'])
+            output_embeddings.append(results[f"example:{idx}:output"]['standard']['embedding:original'])
+
+        input_embeddings = torch.stack(input_embeddings)
+        output_embeddings = torch.stack(output_embeddings)
+
+        embedding_delta:torch.Tensor = output_embeddings - input_embeddings
+
+        embedding_examples_mse = F.mse_loss(embedding_delta, embedding_delta.mean(dim=0, keepdim=True))
+
+        predicted_embedding = results['challenge']['standard']['embedding:original'] + embedding_delta.mean(dim=0, keepdim=False)
+
+        predicted_grid = self.decoder(predicted_embedding)
+        
+        prediction_loss = F.cross_entropy(predicted_grid.view(-1, 11), batch['solution']['grid:padded_original'].long().view(-1)) 
+
+        return embedding_examples_mse, prediction_loss
+    
+    def calculate_loss(self, 
+                       results, 
+                       batch):
+
+        for problem_id in list(results.keys()):
+            for standard_grid_name in ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']:
+                if standard_grid_name not in results[problem_id]: 
+                    continue
+                reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self._calculate_loss(results[problem_id][standard_grid_name], batch[problem_id][standard_grid_name])
+
+            comparative_loss, prediction_loss = self._calculate_comparative_loss(results[problem_id], batch[problem_id])
+
+        return comparative_loss, prediction_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
         for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
@@ -325,7 +317,9 @@ class MultiTaskEncoder(L.LightningModule):
         all_params = self._get_parameters()
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+        comparative_loss, predictive_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+
+        loss = torch.stack([comparative_loss, predictive_loss, reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         loss_total = torch.sum(loss)
 
@@ -483,7 +477,9 @@ class MultiTaskEncoder(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        loss, _, _, _, _, _ = self.calculate_loss(results, batch)
+        comparative_loss, predictive_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+
+        loss = torch.stack([comparative_loss, predictive_loss, reconstruction_loss] + downstream_attribute_loss + task_sensitive_loss + task_invariant_loss + [variable_embedding_loss])
 
         loss_total = torch.sum(loss)
 

@@ -37,15 +37,14 @@ train-encoder:
 	uv run scripts/train_encoder.py \
 		--config train_config \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test \
+		--model-save-path ./models/test/encoder \
 		--log-path ./logs/test
 
-local-pressure-test:
-	@echo "Running full pipeline of ARC Encoder training..."
-	uv run scripts/pressure_test.py \
-		--config pressure_config \
+train-contrastive-encoder:
+	@echo "Running local test of ARC Encoder training..."
+	uv run scripts/train_contrastive_encoder.py \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/tmp \
+		--model-save-path ./models/test/contrastive_encoder \
 		--log-path ./logs/test/tmp
 
 local-test-encoder:
@@ -53,14 +52,14 @@ local-test-encoder:
 	uv run scripts/train_encoder.py \
 		--config test_config \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/tmp \
+		--model-save-path ./models/test/tmp/encoder \
 		--log-path ./logs/test/tmp
 
-local-test-transformer:
+local-test-contrastive-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	uv run scripts/train_contrastive_encoder.py \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/tmp \
+		--model-save-path ./models/test/tmp/contrastive_encoder \
 		--log-path ./logs/test/tmp
 
 view-training:
