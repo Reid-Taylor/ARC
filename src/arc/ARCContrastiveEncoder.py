@@ -461,6 +461,8 @@ class MultiTaskEncoder(L.LightningModule):
         log_dict = {
             "train/Total Loss": loss_total.detach(),
             "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach()),
+            "train/P(Prediction)": torch.exp(-1.0*predictive_loss.detach()),
+            "train/Contrastive MSE": comparative_loss.detach().mean() if comparative_loss else torch.tensor(0.0),
             "train/Transformation Map MSE": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
             "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
             "train/Anti Sparsity Loss": variable_embedding_loss.detach(),
