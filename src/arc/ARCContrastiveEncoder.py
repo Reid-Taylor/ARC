@@ -292,6 +292,8 @@ class MultiTaskEncoder(L.LightningModule):
 
             comparative_loss, prediction_loss = self._calculate_comparative_loss(results[problem_id], batch[problem_id])
 
+        #TODO this needs to be additive, not assignative, at each iteration upon the loop
+
         return comparative_loss, prediction_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
