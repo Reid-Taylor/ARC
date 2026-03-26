@@ -276,7 +276,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         embedding_delta:torch.Tensor = output_embeddings - input_embeddings
 
-        embedding_examples_mse = F.mse_loss(embedding_delta, embedding_delta.mean(dim=0, keepdim=True))
+        embedding_examples_mse = F.mse_loss(embedding_delta, embedding_delta.mean(dim=0, keepdim=True).expand_as(embedding_delta))
 
         predicted_embedding = results['challenge']['standard']['embedding:original'] + embedding_delta.mean(dim=0, keepdim=False)
 
