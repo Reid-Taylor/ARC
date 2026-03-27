@@ -27,7 +27,7 @@ gcp-ssh:
 	gcloud compute ssh $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
 
 gcp-copy-logs:
-	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test/arc_encoder ./logs/test
+	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test ./logs
 
 gcp-copy-models:
 	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/models/test ./models/test
