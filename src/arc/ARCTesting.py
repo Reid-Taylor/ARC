@@ -257,7 +257,7 @@ class AutoEncoder(L.LightningModule):
 
         self.log_dict(
             {
-                "val/val_loss": loss_total.detach(),
+                "Validation/Validation Loss": loss_total.detach(),
             },
             prog_bar=True
         )

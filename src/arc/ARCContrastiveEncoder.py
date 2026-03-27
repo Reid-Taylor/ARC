@@ -474,21 +474,26 @@ class MultiTaskEncoder(L.LightningModule):
             param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
 
         log_dict = {
-            "train/Total Loss": loss_total.detach(),
-            "train/P(Reconstruction)": torch.exp(-1.0*reconstruction_loss.detach()),
-            "train/P(Prediction)": torch.exp(-1.0*predictive_loss.detach()),
-            "train/Contrastive MSE": comparative_loss.detach().mean() if comparative_loss else torch.tensor(0.0),
-            "train/Transformation Map MSE": torch.stack(task_sensitive_loss).detach().mean() if task_sensitive_loss else torch.tensor(0.0),
-            "train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean() if task_invariant_loss else torch.tensor(0.0),
-            "train/Anti Sparsity Loss": variable_embedding_loss.detach(),
-            "metric/Embedding LR": embedding_learning_rate
+            "Train/Total Loss": loss_total.detach(),
+            "Probability/Reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
+            "Probability/Prediction": torch.exp(-1.0*predictive_loss.detach()), #TODO: Currently incorrect calculation; must take average overall all examples in batch
+            # "Probability/Prediction": None,
+
+            "Train/Reconstruction CE": reconstruction_loss.detach(),
+            "Train/Prediction CE": predictive_loss.detach(),
+            "Train/Contrastive MSE": comparative_loss.detach().mean(),
+            "Train/Transformation Map MSE": torch.stack(task_sensitive_loss).detach().mean(),
+            "Train/Task Ignorance MSE": torch.stack(task_invariant_loss).detach().mean(),
+
+            "Train/Anti Sparsity Loss": variable_embedding_loss.detach(),
+
+            "Metric/Embedding LR": embedding_learning_rate,
+            "Metric/Surgery Ratio": self.conflict_ratio
         }
         
         for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
-            log_dict[f"train/P({self.readable[key]})"] = torch.exp(-1.0*loss_val.detach())
-        
-        log_dict["metric/Surgery Ratio"] = self.conflict_ratio
-        
+            log_dict[f"Probability/{self.readable[key]}"] = torch.exp(-1.0*loss_val.detach())
+                
         self.log_dict(log_dict, prog_bar=True)
 
     def validation_step(self, batch, batch_idx):
@@ -502,7 +507,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         self.log_dict(
             {
-                "val/val_loss": loss_total.detach(),
+                "Validation/Validation Loss": loss_total.detach(),
             },
             prog_bar=True
         )
