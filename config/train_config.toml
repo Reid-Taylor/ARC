@@ -1,13 +1,13 @@
 [model]
 [model.shared]
-latent_size = 48
+latent_size = 96
 patch_len = 3
 transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
 n_heads = 12
 n_layers = 6
-learning_rate = 0.003
+learning_rate = 0.002
 tau = 0.85
 chi = 0.9
 activation=50
@@ -29,7 +29,7 @@ color_map = {task_type = "task_insensitive"}
 [training.shared]
 dataset_path = "training"
 [training.encoder]
-batch_size = 125
+batch_size = 250
 epochs = 5000
 [training.transformer]
 batch_size = 1
