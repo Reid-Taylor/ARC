@@ -46,7 +46,7 @@ train-contrastive-encoder:
 		--config train_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/contrastive_encoder \
-		--log-path ./logs/test/tmp/contrastive_encoder
+		--log-path ./logs/test/contrastive_encoder
 
 local-test-encoder:
 	@echo "Running local test of ARC Encoder training..."
