@@ -129,7 +129,8 @@ class MultiTaskEncoder(L.LightningModule):
         
     def _forward_grid(self, grid_1, grid_2):
         """
-        This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results
+        This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results.
+        Accepts batched tensors — grid_1 and grid_2 can have arbitrary batch dimension.
         """
         results_dict = {}
 
@@ -147,36 +148,27 @@ class MultiTaskEncoder(L.LightningModule):
         for attribute in self.downstream_attributes:
             results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
 
-        for task in self.augmentation_representations.keys():
-            results_dict[f'detection:{task}'] = results_dict['embedding:augmentation'] - results_dict['embedding:original']
-
         return results_dict
-    
-    def _forward_problem(self, x):
-        results = {}
-        for grid_key in ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']:
-            grid_results = {}
-
-            if grid_key not in x:
-                continue
-
-            original_encoding = self.preprocessor(x[grid_key]['grid:padded_original'])
-            augmentation_encoding = self.preprocessor(x[grid_key]['grid:padded_augmentation'])
-
-            grid_results['standard'] = self._forward_grid(original_encoding, augmentation_encoding)
-            grid_results["mirrored"] = self._forward_grid(augmentation_encoding, original_encoding)
-
-            results[grid_key] = grid_results
-
-        return results
 
     def forward(self, x):
-        results={}
+        """
+        Batched forward pass. Expects pre-collated batch with:
+          - 'stacked_batch': dict of pre-concatenated grid tensors
+          - 'per_problem': {problem_id: {grid_name: row_index}}
+        Runs each network component once on the full mega-batch.
+        """
+        stacked = x['stacked_batch']
 
-        for k, v in x.items():
-            results[k] = self._forward_problem(v)
+        encoded_originals = self.preprocessor(stacked['grid:padded_original'])
+        encoded_augmentations = self.preprocessor(stacked['grid:padded_augmentation'])
 
-        return results
+        standard = self._forward_grid(encoded_originals, encoded_augmentations)
+        mirrored = self._forward_grid(encoded_augmentations, encoded_originals)
+
+        return {
+            'stacked': {'standard': standard, 'mirrored': mirrored},
+            'per_problem': x['per_problem'],
+        }
     
     def _calculate_loss(self,results,batch) -> tuple[
         torch.Tensor,
@@ -262,79 +254,68 @@ class MultiTaskEncoder(L.LightningModule):
 
     def _calculate_comparative_loss(self, results, batch) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        By accessing the embeddings located under each entries ['standard']['embedding:original'] keys, this method should compute a loss as measured by the deviation of each examples' input-output relationship, compared to the same of the other examples. 
-
-        Additionally, we should calculate a separate reconstruction loss as measured by the average distance delta summed to the challenge embedding, pulling a MSE between the resulting new vector, and the solution embedding vector.
+        Batched comparative loss across all problems. Uses the flat embedding
+        tensor and per_problem index to slice per-problem example embeddings.
+        Solution grids are sliced from the pre-concatenated stacked_batch.
+        The decoder call is batched across all problems.
         """
-        input_embeddings = []
-        output_embeddings = []
+        per_problem = results['per_problem']
+        all_embeddings = results['stacked']['standard']['embedding:original']
+        all_grids = batch['stacked_batch']['grid:padded_original']
 
-        # only access ['standard']['embedding:original'] for this comparative loss
-        for idx in range(3):
-            if f"example:{idx}:input" not in results:
-                continue
+        all_delta_mse = []
+        predicted_embeddings = []
+        solution_grids = []
 
-            input_embeddings.append(results[f"example:{idx}:input"]['standard']['embedding:original'])
-            output_embeddings.append(results[f"example:{idx}:output"]['standard']['embedding:original'])
+        for problem_id, grid_indices in per_problem.items():
+            input_embs = []
+            output_embs = []
 
-        input_embeddings = torch.stack(input_embeddings)
-        output_embeddings = torch.stack(output_embeddings)
-
-        embedding_delta:torch.Tensor = output_embeddings - input_embeddings
-
-        embedding_examples_mse = F.mse_loss(embedding_delta, embedding_delta.mean(dim=0, keepdim=True).expand_as(embedding_delta))
-
-        predicted_embedding = results['challenge']['standard']['embedding:original'] + embedding_delta.mean(dim=0, keepdim=False)
-
-        predicted_grid = self.decoder(predicted_embedding)
-        
-        prediction_loss = F.cross_entropy(predicted_grid.view(-1, 11), batch['solution']['grid:padded_original'].long().view(-1)) 
-
-        return embedding_examples_mse, prediction_loss
-    
-    def calculate_loss(self, 
-                       results, 
-                       batch):
-        reconstruction_loss = torch.tensor([0.0], dtype=torch.float32)
-        downstream_attribute_loss = torch.tensor([0.0 for _ in range(len(self.downstream_attributes))], dtype=torch.float32)
-        task_sensitive_loss = torch.tensor([0.0 for _ in range(len(self.augmentation_representations))], dtype=torch.float32)
-        task_invariant_loss = torch.tensor([0.0 for _ in range(len(self.task_agnostics))], dtype=torch.float32)
-        variable_embedding_loss = torch.tensor([0.0], dtype=torch.float32)
-        comparative_loss = torch.tensor([0.0], dtype=torch.float32)
-        prediction_loss = torch.tensor([0.0], dtype=torch.float32)
-
-        num_inner_loops = 0
-        num_outer_loops = 0
-
-        for problem_id in list(results.keys()):
-            for standard_grid_name in ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']:
-                if standard_grid_name not in results[problem_id]: 
+            for idx in range(3):
+                input_key = f"example:{idx}:input"
+                output_key = f"example:{idx}:output"
+                if input_key not in grid_indices:
                     continue
-                num_inner_loops += 1 
-                reconstruction_loss_sample, downstream_attribute_loss_samples, task_sensitive_loss_samples, task_invariant_loss_samples, variable_embedding_loss_sample = self._calculate_loss(results[problem_id][standard_grid_name], batch[problem_id][standard_grid_name])
+                input_embs.append(all_embeddings[grid_indices[input_key]:grid_indices[input_key]+1])
+                output_embs.append(all_embeddings[grid_indices[output_key]:grid_indices[output_key]+1])
 
-                downstream_attribute_loss += downstream_attribute_loss_samples
-                task_sensitive_loss += task_sensitive_loss_samples
-                task_invariant_loss += task_invariant_loss_samples
-                reconstruction_loss += reconstruction_loss_sample
-                variable_embedding_loss += variable_embedding_loss_sample
+            input_embs = torch.cat(input_embs, dim=0)
+            output_embs = torch.cat(output_embs, dim=0)
 
-            comparative_loss_sample, prediction_loss_sample = self._calculate_comparative_loss(results[problem_id], batch[problem_id])
-            comparative_loss += comparative_loss_sample
-            prediction_loss += prediction_loss_sample
+            delta = output_embs - input_embs
+            mean_delta = delta.mean(dim=0, keepdim=True)
 
-            num_outer_loops += 1 
+            all_delta_mse.append(F.mse_loss(delta, mean_delta.expand_as(delta)))
 
-        comparative_loss /= num_outer_loops
-        prediction_loss /= num_outer_loops
+            predicted_embeddings.append(
+                all_embeddings[grid_indices['challenge']:grid_indices['challenge']+1] + mean_delta
+            )
+            sol_idx = grid_indices['solution']
+            solution_grids.append(all_grids[sol_idx:sol_idx+1])
 
-        reconstruction_loss /= num_inner_loops
-        variable_embedding_loss /= num_inner_loops
-        downstream_attribute_loss /= num_inner_loops
-        task_sensitive_loss /= num_inner_loops
-        task_invariant_loss /= num_inner_loops
+        comparative_loss = torch.stack(all_delta_mse).mean()
 
-        return comparative_loss, prediction_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
+        predicted_embeddings = torch.cat(predicted_embeddings, dim=0)
+        solution_grids = torch.cat(solution_grids, dim=0)
+
+        predicted_grids = self.decoder(predicted_embeddings)
+        prediction_loss = F.cross_entropy(predicted_grids.view(-1, 11), solution_grids.long().view(-1))
+
+        return comparative_loss, prediction_loss
+    
+    def calculate_loss(self, results, batch):
+        """
+        results: output of forward() with 'stacked' and 'per_problem'.
+        batch: pre-collated batch with 'stacked_batch' and 'per_problem'.
+        
+        Both forward results and batch tensors are already concatenated,
+        so no collection or concatenation is needed here.
+        """
+        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self._calculate_loss(results['stacked'], batch['stacked_batch'])
+
+        comparative_loss, prediction_loss = self._calculate_comparative_loss(results, batch)
+
+        return comparative_loss.view(1), prediction_loss.view(1), reconstruction_loss.view(1), downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss.view(1)
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
         for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):

@@ -13,7 +13,6 @@ import torch
 import lightning as L
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from lightning.pytorch.loggers import TensorBoardLogger
-from tensordict import TensorDict
 
 def get_device():
     if torch.cuda.is_available():
@@ -44,37 +43,46 @@ def create_dataloader(config: Dict[str, Any]):
     num_samples = len(problems)
     
     def collate_fn(batch):
-        collated = {}
-        for problem in batch:
-            grids = {}
+        grid_names = ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']
 
-            for idx, example in enumerate(problem.examples):
-                if idx >= max_num_examples:
+        per_problem = {}
+        batch_tensors = {}
+
+        idx = 0
+        for problem in batch:
+            problem_name = problem.name
+            per_problem[problem_name] = {}
+
+            grids = {}
+            for i, example in enumerate(problem.examples):
+                if i >= max_num_examples:
                     break
                 for role in ("input", "output"):
                     grid_dict = example[role].to_dict()
-                    tensor_data = {
+                    grids[f"example:{i}:{role}"] = {
                         k: v for k, v in grid_dict.items()
                         if v is not None and isinstance(v, torch.Tensor)
                     }
-                    grids[f"example:{idx}:{role}"] = TensorDict(
-                        tensor_data, batch_size=1, device=get_device()
-                    )
 
             for role, arc_grid in (("challenge", problem.challenge), ("solution", problem.solution)):
                 grid_dict = arc_grid.to_dict()
-                tensor_data = {
+                grids[role] = {
                     k: v for k, v in grid_dict.items()
                     if v is not None and isinstance(v, torch.Tensor)
                 }
-                grids[role] = TensorDict(
-                    tensor_data, batch_size=1, device=get_device()
-                )
 
-            grids["num_examples"] = min(len(problem.examples), max_num_examples)
-            collated[problem.name] = grids
+            for grid_name in grid_names:
+                if grid_name not in grids:
+                    continue
+                for key, val in grids[grid_name].items():
+                    batch_tensors.setdefault(key, []).append(val)
+                per_problem[problem_name][grid_name] = idx
+                idx += 1
 
-        return collated
+        return {
+            'stacked_batch': {k: torch.cat(v, dim=0).to(get_device()) for k, v in batch_tensors.items()},
+            'per_problem': per_problem,
+        }
     
     train_dataloader = torch.utils.data.DataLoader(
         problems[:int(0.9*num_samples)],
