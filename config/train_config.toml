@@ -1,6 +1,6 @@
 [model]
 [model.shared]
-latent_size = 36
+latent_size = 60
 patch_len = 3
 transformation_dimension_size = 256
 [model.encoder]
