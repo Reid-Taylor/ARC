@@ -120,9 +120,10 @@ class SelfAttentionHead(torch.nn.Module):
         batch_size, seq_len, dim_model = key.shape
 
         attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
-        attention_output /= seq_len**0.5
+        attention_output /= dim_model**0.5
+        attention_output = F.softmax(attention_output, dim=-1)
 
-        return torch.einsum("bqq,bqd->bqd",attention_output, value)
+        return torch.einsum("bqk,bkd->bqd",attention_output, value)
 
 class MSA(torch.nn.Module):
     def __init__(self,
@@ -392,18 +393,16 @@ class UniversalTransformerEncoder(torch.nn.Module):
                 * still_running
             )
 
+            # Compute weights BEFORE updating accumulators
+            remainder:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = 1.0 - halting_probability - p * still_running
+            update_weights:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = p * still_running_now + new_halted * remainder
+
+            # THEN update accumulators
             halting_probability = halting_probability + p * still_running
-
-            remainders = remainders + new_halted * (1.0 - halting_probability)
-
+            remainders = remainders + new_halted * remainder
             halting_probability = halting_probability + new_halted * remainders
 
             n_updates = n_updates + still_running
-
-            # Weights: still_running uses p, newly halted uses remainder
-            update_weights:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = p * still_running_now + new_halted * (
-                1.0 - halting_probability + new_halted * remainders
-            )
 
             # Apply the UT recurrent step
             state = self._ut_step(state, P_t)
