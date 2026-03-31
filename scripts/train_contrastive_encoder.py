@@ -181,7 +181,7 @@ def setup_trainer(
     
     early_stopping = EarlyStopping(
         monitor="Validation/Validation Loss",
-        patience=7,
+        patience=5,
         mode="min"
     )
     
@@ -201,7 +201,7 @@ def setup_trainer(
         accelerator=accelerator,
         devices=devices,
         log_every_n_steps=1,
-        check_val_every_n_epoch=5,
+        check_val_every_n_epoch=3,
         enable_progress_bar=True,
         enable_model_summary=True
     )
