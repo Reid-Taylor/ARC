@@ -120,7 +120,7 @@ class SelfAttentionHead(torch.nn.Module):
         batch_size, seq_len, dim_model = key.shape
 
         attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
-        # attention_output /= seq_len**0.5
+        attention_output /= seq_len**0.5
 
         return torch.einsum("bqq,bqd->bqd",attention_output, value)
 
@@ -265,6 +265,158 @@ class AttributeHead(torch.nn.Module):
         final_layer = self.fc_out(x)
 
         return final_layer
+
+class UniversalTransformerEncoder(torch.nn.Module):
+    """
+    The Universal Transformer encoder as defined by Dehghani et al. (2019), arXiv:1807.03819v3.
+
+    Applies a shared self-attentive recurrent block for T steps (or dynamically via ACT).
+    At each step t, for all positions in parallel:
+        A_t = LayerNorm((H_{t-1} + P_t) + MultiHeadSelfAttention(H_{t-1} + P_t))
+        H_t = LayerNorm(A_t + Transition(A_t))
+    where P_t is the sum of sinusoidal position and time-step encodings, and Transition
+    is a position-wise fully-connected network (ReLU between two affine transforms).
+
+    Implements per-position Adaptive Computation Time (ACT) halting from Graves (2016).
+    """
+    @beartype
+    def __init__(
+        self,
+        n_heads: int,
+        dim_model: int,
+        max_steps: int = 8,
+        act_threshold: float = 0.99,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.n_heads = n_heads
+        self.dim_model = dim_model
+        self.max_steps = max_steps
+        self.act_threshold = act_threshold
+
+        # Shared across all recurrent steps (weight tying)
+        self.msa = MSA(n_heads, dim_model)
+
+        # Transition function: single ReLU between two affine transformations (Sec 2.1). We modify this implementation to allow spectral normalization.
+        self.transition_w1 = torch.nn.utils.spectral_norm(torch.nn.Linear(dim_model, dim_model))
+        self.transition_w2 = torch.nn.Linear(dim_model, dim_model)
+
+        self.dropout = torch.nn.Dropout(dropout)
+
+        # ACT halting probability: projects each position's state to a scalar sigmoid (Appendix C)
+        self.halting_linear = torch.nn.Linear(dim_model, 1)
+
+    def _coordinate_encoding(
+        self,
+        seq_len: int,
+        time_step: int,
+        device: torch.device,
+    ) -> Float[torch.Tensor, "seq_len dim_model"]:
+        """
+        Compute the combined position + time-step sinusoidal encoding P^t (Eqs 6-7):
+            P^t_{i,2j}   = sin(i / 10000^{2j/d}) + sin(t / 10000^{2j/d})
+            P^t_{i,2j+1} = cos(i / 10000^{2j/d}) + cos(t / 10000^{2j/d})
+        """
+        d = self.dim_model
+        pos = torch.arange(seq_len, dtype=torch.float32, device=device).unsqueeze(1)       # (m, 1)
+        t = torch.tensor([time_step], dtype=torch.float32, device=device).unsqueeze(1)      # (1, 1)
+        dim_idx = torch.arange(d, dtype=torch.float32, device=device).unsqueeze(0)          # (1, d)
+
+        denom = torch.pow(10000.0, (2.0 * (dim_idx // 2)) / d)                             # (1, d)
+
+        pos_angles = pos / denom   # (m, d)
+        t_angles = t / denom       # (1, d)
+
+        encoding = torch.zeros(seq_len, d, device=device)
+        encoding[:, 0::2] = torch.sin(pos_angles[:, 0::2]) + torch.sin(t_angles[:, 0::2])
+        encoding[:, 1::2] = torch.cos(pos_angles[:, 1::2]) + torch.cos(t_angles[:, 1::2])
+
+        return encoding
+
+    def _transition(self, x: torch.Tensor) -> torch.Tensor:
+        """Position-wise transition: W2 * ReLU(W1 * x + b1) + b2"""
+        return self.transition_w2(F.relu(self.transition_w1(x)))
+
+    def _ut_step(self, H: torch.Tensor, P_t: torch.Tensor) -> torch.Tensor:
+        """
+        One recurrent refinement step of the Universal Transformer (Eqs 4-5):
+            A_t = LayerNorm((H_{t-1} + P_t) + MultiHeadSelfAttention(H_{t-1} + P_t))
+            H_t = LayerNorm(A_t + Transition(A_t))
+
+        We omit layer normalization to preserve signal related to magnitude, at the risk of instability during training.
+        """
+        X = H + P_t
+        A_t = X + self.dropout(self.msa(X))
+        H_t = A_t + self.dropout(self._transition(A_t))
+        return H_t
+
+    @beartype
+    def forward(
+        self, processed_grid_repr: Float[torch.Tensor, "batch_size seq_len dim_model"]
+    ) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
+        """
+        Runs the Universal Transformer encoder with per-position ACT halting.
+
+        At each recurrent step, each position that has not yet halted is updated via
+        the shared self-attentive block. A sigmoid halting probability is computed per
+        position; once the cumulative probability exceeds the threshold, that position
+        halts and its state is frozen. The final output is a weighted combination of
+        the states at each step, weighted by the halting probabilities (following
+        Graves, 2016 and Appendix C of Dehghani et al., 2019).
+        """
+        batch_size, seq_len, d = processed_grid_repr.shape
+        device = processed_grid_repr.device
+
+        state:Float[torch.Tensor, f"{batch_size} {seq_len} {d}"] = processed_grid_repr
+
+        accumulated_state:Float[torch.Tensor, f"{batch_size} {seq_len} {d}"] = torch.zeros_like(state)
+
+        halting_probability:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = torch.zeros(batch_size, seq_len, 1, device=device)
+        remainders:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = torch.zeros(batch_size, seq_len, 1, device=device)
+        n_updates:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = torch.zeros(batch_size, seq_len, 1, device=device)
+
+        for t in range(1, self.max_steps + 1):
+            P_t:Float[torch.Tensor, f"{seq_len} {d}"] = self._coordinate_encoding(seq_len, t, device)
+
+            p:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = torch.sigmoid(self.halting_linear(state))
+
+            still_running:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = (halting_probability < 1.0).float()
+
+            new_halted:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = (
+                (halting_probability + p * still_running > self.act_threshold).float()
+                * still_running
+            )
+
+            still_running_now:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = (
+                (halting_probability + p * still_running <= self.act_threshold).float()
+                * still_running
+            )
+
+            halting_probability = halting_probability + p * still_running
+
+            remainders = remainders + new_halted * (1.0 - halting_probability)
+
+            halting_probability = halting_probability + new_halted * remainders
+
+            n_updates = n_updates + still_running
+
+            # Weights: still_running uses p, newly halted uses remainder
+            update_weights:Float[torch.Tensor, f"{batch_size} {seq_len} 1"] = p * still_running_now + new_halted * (
+                1.0 - halting_probability + new_halted * remainders
+            )
+
+            # Apply the UT recurrent step
+            state = self._ut_step(state, P_t)
+
+            # Accumulate weighted state
+            accumulated_state = accumulated_state + update_weights * state
+
+            # Early exit if all positions have halted
+            if (still_running_now.sum() == 0).item():
+                break
+
+        return accumulated_state
+
 
 @beartype
 class Decoder(torch.nn.Module):

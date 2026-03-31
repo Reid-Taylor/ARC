@@ -6,7 +6,7 @@ transformation_dimension_size = 256
 [model.encoder]
 grid_size = 900
 n_heads = 12
-n_layers = 6
+n_layers = 10
 learning_rate = 0.002
 tau = 0.85
 chi = 0.9
