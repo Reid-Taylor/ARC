@@ -218,6 +218,9 @@ def main():
     parser.add_argument("--log-path", type=str, default="./lightning_logs", help="Logging path")
     parser.add_argument("--no-gpu", action="store_true", help="Disable GPU usage")
     parser.add_argument("--output-metrics", type=str, help="Path to save training metrics JSON")
+    parser.add_argument("--resume", type=str, default=None,
+                        help="Path to a checkpoint to resume training from (e.g. models/test/last.ckpt). "
+                             "If not provided, a new model is created from scratch.")
     
     args = parser.parse_args()
     
@@ -235,9 +238,18 @@ def main():
     train_dataloader, val_dataloaders = create_dataloader(config)
     print(f"Dataset loaded with {len(train_dataloader)} batches")
     
-    print("Initializing model...")
-    model = create_model(config)
-    print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
+    if args.resume:
+        ckpt_path = Path(args.resume)
+        if not ckpt_path.exists():
+            print(f"Error: checkpoint not found at {ckpt_path}")
+            sys.exit(1)
+        print(f"Loading model from checkpoint: {ckpt_path}")
+        model = MultiTaskEncoder.load_from_checkpoint(str(ckpt_path), map_location=get_device())
+        print(f"Model loaded with {sum(p.numel() for p in model.parameters())} parameters")
+    else:
+        print("Initializing new model...")
+        model = create_model(config)
+        print(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
     
     print("Setting up trainer...")
     trainer = setup_trainer(
@@ -248,7 +260,12 @@ def main():
     )
     
     print("Starting training...")
-    trainer.fit(model=model, train_dataloaders=train_dataloader, val_dataloaders=val_dataloaders)
+    trainer.fit(
+        model=model,
+        train_dataloaders=train_dataloader,
+        val_dataloaders=val_dataloaders,
+        ckpt_path=str(args.resume) if args.resume else None
+    )
     
     if args.output_metrics:
         metrics = {
