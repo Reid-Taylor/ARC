@@ -515,12 +515,16 @@ class MultiTaskEncoder(L.LightningModule):
 
         loss_total = torch.sum(loss)
 
-        self.log_dict(
-            {
-                "Validation/Validation Loss": loss_total.detach(),
-            },
-            prog_bar=True
-        )
+        log_dict = {
+            "Validation/Validation Loss": loss_total.detach(),
+            "Validation/Reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
+            "Validation/Prediction": torch.exp(-1.0*predictive_loss.detach())
+        }
+        
+        for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
+            log_dict[f"Validation/{self.readable[key]}"] = torch.exp(-1.0*loss_val.detach())
+                
+        self.log_dict(log_dict, prog_bar=True)
 
     def configure_optimizers(self):
         params = self._get_parameters()
