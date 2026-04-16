@@ -22,9 +22,6 @@ class MultiTaskEncoder(L.LightningModule):
             activation:int=20,
             **network_dimensions
         ) -> None:
-        """
-        Having thus constructed the module to learn the vector space representation of a specific transformation, we should consider "in-housing" the transformation space projector. This does not require a different projection beyond the embedding's latent space--indeed, we hypothesize there will be greater performance achieved by the model if it learns to create embeddings which inherently respect the rules required by the theorized transformation space projection model. This should be implemented as a contrastive learning objective in the same manner as self.adjust_transformation_embeddings().
-        """
         super().__init__()
 
         self.preprocessor = TensorDictModule(

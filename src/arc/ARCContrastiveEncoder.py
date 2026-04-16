@@ -487,7 +487,6 @@ class MultiTaskEncoder(L.LightningModule):
             "Train/Total Loss": loss_total.detach(),
             "Probability/Reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
             "Probability/Prediction": torch.exp(-1.0*predictive_loss.detach()),
-            # "Probability/Prediction": None,
 
             "Train/Reconstruction CE": reconstruction_loss.detach(),
             "Train/Prediction CE": predictive_loss.detach(),
