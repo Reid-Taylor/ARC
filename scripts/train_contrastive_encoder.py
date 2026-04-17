@@ -40,7 +40,13 @@ def create_dataloader(config: Dict[str, Any]):
     
     problems = ARCProblemSet.load_from_data_directory(dataset_path)
 
+    rng = torch.Generator().manual_seed(42)
     num_samples = len(problems)
+    shuffled_indices = torch.randperm(num_samples, generator=rng).tolist()
+    problems = [problems[i] for i in shuffled_indices]
+    split = int(0.9 * num_samples)
+    train_problems = problems[:split]
+    val_problems = problems[split:]
     
     def collate_fn(batch):
         grid_names = ['example:0:input','example:0:output','example:1:input','example:1:output','example:2:input','example:2:output','challenge','solution']
@@ -58,6 +64,7 @@ def create_dataloader(config: Dict[str, Any]):
                 if i >= max_num_examples:
                     break
                 for role in ("input", "output"):
+                    example[role].refresh_augmentation()
                     grid_dict = example[role].to_dict()
                     grids[f"example:{i}:{role}"] = {
                         k: v for k, v in grid_dict.items()
@@ -65,6 +72,7 @@ def create_dataloader(config: Dict[str, Any]):
                     }
 
             for role, arc_grid in (("challenge", problem.challenge), ("solution", problem.solution)):
+                arc_grid.refresh_augmentation()
                 grid_dict = arc_grid.to_dict()
                 grids[role] = {
                     k: v for k, v in grid_dict.items()
@@ -79,26 +87,53 @@ def create_dataloader(config: Dict[str, Any]):
                 per_problem[problem_name][grid_name] = idx
                 idx += 1
 
+        num_problems = len(batch)
+        example_input_indices = torch.zeros(num_problems, 3, dtype=torch.long)
+        example_output_indices = torch.zeros(num_problems, 3, dtype=torch.long)
+        example_mask = torch.zeros(num_problems, 3, dtype=torch.bool)
+        challenge_indices = torch.zeros(num_problems, dtype=torch.long)
+        solution_indices = torch.zeros(num_problems, dtype=torch.long)
+
+        for p_idx, grid_map in enumerate(per_problem.values()):
+            for ex_idx in range(3):
+                input_key = f"example:{ex_idx}:input"
+                output_key = f"example:{ex_idx}:output"
+                if input_key in grid_map:
+                    example_input_indices[p_idx, ex_idx] = grid_map[input_key]
+                    example_output_indices[p_idx, ex_idx] = grid_map[output_key]
+                    example_mask[p_idx, ex_idx] = True
+            challenge_indices[p_idx] = grid_map['challenge']
+            solution_indices[p_idx] = grid_map['solution']
+
         return {
-            'stacked_batch': {k: torch.cat(v, dim=0).to(get_device()) for k, v in batch_tensors.items()},
+            'stacked_batch': {k: torch.cat(v, dim=0) for k, v in batch_tensors.items()},
             'per_problem': per_problem,
+            'problem_indices': {
+                'example_input': example_input_indices,
+                'example_output': example_output_indices,
+                'example_mask': example_mask,
+                'challenge': challenge_indices,
+                'solution': solution_indices,
+            },
         }
     
     train_dataloader = torch.utils.data.DataLoader(
-        problems[:int(0.9*num_samples)],
+        train_problems,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=collate_fn,
         num_workers=2 if torch.cuda.is_available() else 0,
-        pin_memory=(get_device().type=="cuda")
+        pin_memory=(get_device().type=="cuda"),
+        persistent_workers=False
     )
     val_dataloader = torch.utils.data.DataLoader(
-        problems[int(0.9*num_samples):],
+        val_problems,
         batch_size=batch_size,
         shuffle=False,
         collate_fn=collate_fn,
         num_workers=2 if torch.cuda.is_available() else 0,
-        pin_memory=(get_device().type=="cuda")
+        pin_memory=(get_device().type=="cuda"),
+        persistent_workers=False
     )
     
     return train_dataloader, val_dataloader
@@ -154,7 +189,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                 } for key in downstream_attributes_config.keys()
             },
         }
-    ).to(get_device())
+    )
     
     return model
 
@@ -181,7 +216,7 @@ def setup_trainer(
     
     early_stopping = EarlyStopping(
         monitor="Validation/Validation Loss",
-        patience=5,
+        patience=25,
         mode="min"
     )
     

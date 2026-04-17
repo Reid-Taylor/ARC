@@ -105,6 +105,18 @@ class ARCGrid:
             "detection:isolate_color":None,
         }
     
+    def refresh_augmentation(self) -> None:
+        self.augmentation_list = sample(AUGMENTATIONS, k=1)
+        self.augmented_grid = self.grid.detach().clone()
+        self.augment_grid()
+        augmented_shape = self.augmented_grid.shape
+        self.padded_augmented_grid = torch.nn.functional.pad(
+            self.augmented_grid,
+            pad=(0, 30 - augmented_shape[-1], 0, 30 - augmented_shape[-2]),
+            mode='constant',
+            value=0
+        ).to(torch.float32)
+
     def augment_grid(self) -> None:
         for aug in self.augmentation_list:
             if aug == "color_map":

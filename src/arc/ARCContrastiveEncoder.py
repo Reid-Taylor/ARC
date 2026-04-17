@@ -4,7 +4,6 @@ from beartype.typing import Dict, List
 import lightning as L
 import torch
 from torch.nn import functional as F
-from tensordict.nn import TensorDictModule
 from jaxtyping import Float
 from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor
 from src.arc.ARCUtils import anti_sparsity_loss
@@ -27,53 +26,27 @@ class MultiTaskEncoder(L.LightningModule):
         """
         super().__init__()
 
-        self.preprocessor = TensorDictModule(
-            PreProcessor(**network_dimensions['PreProcessor']),
-            in_keys=["grid:padded_original"],
-            out_keys=["grid:encoded_original"]
-        )
+        self.preprocessor = PreProcessor(**network_dimensions['PreProcessor'])
 
-        self.online_encoder = TensorDictModule(
-            Encoder(**network_dimensions["Encoder"]),
-            in_keys=["grid:encoded_original"],
-            out_keys=["embedding:original"]
+        self.online_encoder = Encoder(**network_dimensions["Encoder"])
+        self.target_encoder = Encoder(**network_dimensions["Encoder"])
+        self.target_encoder.load_state_dict(
+            self.online_encoder.state_dict()
         )
-        self.target_encoder = TensorDictModule(
-            Encoder(**network_dimensions["Encoder"]),
-            in_keys=["grid:encoded_original"],
-            out_keys=["embedding:original"]
-        )
-        self.target_encoder.module.load_state_dict(
-            self.online_encoder.module.state_dict()
-        )
+        for p in self.target_encoder.parameters():
+            p.requires_grad = False
 
-        self.online_projector = TensorDictModule(
-            FullyConnectedLayer(**network_dimensions["Contrastive Projection"]),
-            in_keys=["embedding:original"],
-            out_keys=["embedding:contrastive_space:online"]
+        self.online_projector = FullyConnectedLayer(**network_dimensions["Contrastive Projection"])
+        self.target_projector = FullyConnectedLayer(**network_dimensions["Contrastive Projection"])
+        self.target_projector.load_state_dict(
+            self.online_projector.state_dict()
         )
-        self.target_projector = TensorDictModule(
-            FullyConnectedLayer(**network_dimensions["Contrastive Projection"]),
-            in_keys=["embedding:augmentation"],
-            out_keys=["embedding:contrastive_space:target"]
-        )
-        self.target_projector.module.load_state_dict(
-            self.online_projector.module.state_dict()
-        )
+        for p in self.target_projector.parameters():
+            p.requires_grad = False
         
-        self.online_predictor = TensorDictModule(
-            FullyConnectedLayer(**network_dimensions["Contrastive Predictor"]),
-            in_keys=["embedding:contrastive_space:online"],
-            out_keys=["embedding:contrastive_space:prediction"]
-        )
+        self.online_predictor = FullyConnectedLayer(**network_dimensions["Contrastive Predictor"])
 
-        self.decoder = TensorDictModule(
-            Decoder(
-                **network_dimensions["Decoder"]
-            ),
-            in_keys=["embedding:original"],
-            out_keys=["decoding:padded_original"]
-        )
+        self.decoder = Decoder(**network_dimensions["Decoder"])
 
         self.task_agnostics: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
@@ -91,12 +64,8 @@ class MultiTaskEncoder(L.LightningModule):
                 raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
         for key in attribute_requirements:
-            setattr(self, f"attribute:{key}", TensorDictModule(
-                AttributeHead( #rename kwargs in the dict of train_encoder
-                    **network_dimensions["Attribute Predictor"].get(key)
-                ),
-                in_keys=["embedding:original"],
-                out_keys=[f"prediction:{key}"]
+            setattr(self, f"attribute:{key}", AttributeHead(
+                **network_dimensions["Attribute Predictor"].get(key)
             ))
 
         self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
@@ -113,14 +82,14 @@ class MultiTaskEncoder(L.LightningModule):
 
     def _get_parameters(self):
         params = {
-            "online_encoder": [p for p in self.online_encoder.module.parameters() if p.requires_grad],
-            "online_projector": [p for p in self.online_projector.module.parameters() if p.requires_grad],
-            "decoder": [p for p in self.decoder.module.parameters() if p.requires_grad],
-            "target_encoder": [p for p in self.target_encoder.module.parameters() if p.requires_grad],
-            "target_projector": [p for p in self.target_projector.module.parameters() if p.requires_grad],
-            "online_predictor": [p for p in self.online_predictor.module.parameters() if p.requires_grad],
+            "online_encoder": [p for p in self.online_encoder.parameters() if p.requires_grad],
+            "online_projector": [p for p in self.online_projector.parameters() if p.requires_grad],
+            "decoder": [p for p in self.decoder.parameters() if p.requires_grad],
+            "target_encoder": list(self.target_encoder.parameters()),
+            "target_projector": list(self.target_projector.parameters()),
+            "online_predictor": [p for p in self.online_predictor.parameters() if p.requires_grad],
             "attribute_predictors": {
-                key: [p for p in getattr(self, f"attribute:{key}").module.parameters() if p.requires_grad]
+                key: [p for p in getattr(self, f"attribute:{key}").parameters() if p.requires_grad]
                 for key in self.downstream_attributes
             },
             "transformation_representations": [p for p in self.augmentation_representations.parameters()]
@@ -181,7 +150,7 @@ class MultiTaskEncoder(L.LightningModule):
         pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
         original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
-        augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
+        augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_augmentation']
 
         detectable_indicators:Float[torch.Tensor, "batch_size 1 1"] = torch.maximum(
             torch.maximum(
@@ -205,12 +174,12 @@ class MultiTaskEncoder(L.LightningModule):
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
-            channel_dim = getattr(self, f"attribute:{key}").module.channels
-            pred_standard = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
+            channel_dim = getattr(self, f"attribute:{key}").channels
+            attr_pred = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
             targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
             downstream_attribute_loss.append(
                 F.cross_entropy(
-                    pred_standard,
+                    attr_pred,
                     targets
                 )
             )
@@ -232,15 +201,12 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.task_agnostics:
             weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
             if weights.sum()>0:
+                diff = results['standard']["embedding:contrastive_space:prediction"] - results['standard']["embedding:contrastive_space:target"]
                 task_invariant_loss.append(
-                    F.mse_loss(
-                        results['standard']["embedding:contrastive_space:prediction"], 
-                        results['standard']["embedding:contrastive_space:target"], 
-                        weight=weights
-                    )
+                    (diff ** 2 * weights).sum() / weights.sum()
                 )
             else: 
-                task_invariant_loss.append(torch.zeros(1, device=pred_standard.device).squeeze())
+                task_invariant_loss.append(torch.zeros(1, device=reconstruction_loss.device).squeeze())
 
         task_invariant_loss = torch.stack(task_invariant_loss)
 
@@ -254,51 +220,39 @@ class MultiTaskEncoder(L.LightningModule):
 
     def _calculate_comparative_loss(self, results, batch) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Batched comparative loss across all problems. Uses the flat embedding
-        tensor and per_problem index to slice per-problem example embeddings.
-        Solution grids are sliced from the pre-concatenated stacked_batch.
-        The decoder call is batched across all problems.
+        Vectorized comparative loss across all problems. Uses pre-built index
+        tensors from the collate function to gather embeddings in a single
+        operation, avoiding any Python-level per-problem loop.
         """
-        per_problem = results['per_problem']
+        indices = batch['problem_indices']
         all_embeddings = results['stacked']['standard']['embedding:original']
         all_grids = batch['stacked_batch']['grid:padded_original']
 
-        all_delta_mse = []
-        predicted_embeddings = []
-        solution_grids = []
+        input_idx:Float[torch.Tensor, "batch_size 3"] = indices['example_input'].to(all_embeddings.device)
+        output_idx:Float[torch.Tensor, "batch_size 3"] = indices['example_output'].to(all_embeddings.device)
+        mask:Float[torch.Tensor, "batch_size 3"] = indices['example_mask'].to(all_embeddings.device)
+        challenge_idx:Float[torch.Tensor, "batch_size"] = indices['challenge'].to(all_embeddings.device)
+        solution_idx:Float[torch.Tensor, "batch_size"] = indices['solution'].to(all_embeddings.device)
 
-        for problem_id, grid_indices in per_problem.items():
-            input_embs = []
-            output_embs = []
+        input_embs:Float[torch.Tensor, "batch_size 3 dim_model"] = all_embeddings[input_idx]
+        output_embs:Float[torch.Tensor, "batch_size 3 dim_model"] = all_embeddings[output_idx]
 
-            for idx in range(3):
-                input_key = f"example:{idx}:input"
-                output_key = f"example:{idx}:output"
-                if input_key not in grid_indices:
-                    continue
-                input_embs.append(all_embeddings[grid_indices[input_key]:grid_indices[input_key]+1])
-                output_embs.append(all_embeddings[grid_indices[output_key]:grid_indices[output_key]+1])
+        delta:Float[torch.Tensor, "batch_size 3 dim_model"] = output_embs - input_embs
+        mask_f:Float[torch.Tensor, "batch_size 3 1"] = mask.unsqueeze(-1).float()
+        num_valid:Float[torch.Tensor, "batch_size 1 1"] = mask_f.sum(dim=1, keepdim=True).clamp(min=1)
+        mean_delta:Float[torch.Tensor, "batch_size 1 dim_model"] = (delta * mask_f).sum(dim=1, keepdim=True) / num_valid
 
-            input_embs = torch.cat(input_embs, dim=0)
-            output_embs = torch.cat(output_embs, dim=0)
+        delta_sq:Float[torch.Tensor, "batch_size 3 dim_model"] = (delta - mean_delta.expand_as(delta)) ** 2 * mask_f
+        D = delta.shape[-1]
+        per_problem_count:Float[torch.Tensor, "batch_size"] = (mask_f.sum(dim=1).squeeze(-1) * D).clamp(min=1)
+        per_problem_mse:Float[torch.Tensor, "batch_size"] = delta_sq.sum(dim=(1, 2)) / per_problem_count
+        comparative_loss = per_problem_mse.mean()
 
-            delta = output_embs - input_embs
-            mean_delta = delta.mean(dim=0, keepdim=True)
+        challenge_embs:Float[torch.Tensor, "batch_size dim_model"] = all_embeddings[challenge_idx]
+        predicted_embs:Float[torch.Tensor, "batch_size dim_model"] = challenge_embs + mean_delta.squeeze(1)
 
-            all_delta_mse.append(F.mse_loss(delta, mean_delta.expand_as(delta)))
-
-            predicted_embeddings.append(
-                all_embeddings[grid_indices['challenge']:grid_indices['challenge']+1] + mean_delta
-            )
-            sol_idx = grid_indices['solution']
-            solution_grids.append(all_grids[sol_idx:sol_idx+1])
-
-        comparative_loss = torch.stack(all_delta_mse).mean()
-
-        predicted_embeddings = torch.cat(predicted_embeddings, dim=0)
-        solution_grids = torch.cat(solution_grids, dim=0)
-
-        predicted_grids = self.decoder(predicted_embeddings)
+        predicted_grids = self.decoder(predicted_embs)
+        solution_grids = all_grids[solution_idx]
         prediction_loss = F.cross_entropy(predicted_grids.view(-1, 11), solution_grids.long().view(-1))
 
         return comparative_loss, prediction_loss
@@ -319,7 +273,7 @@ class MultiTaskEncoder(L.LightningModule):
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
         for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
-            is_last = idx==len(self.augmentation_representations)
+            is_last = idx==(len(self.augmentation_representations) - 1)
             task_specific_gradient:tuple[torch.Tensor] = torch.autograd.grad(
                 loss[idx],
                 parameter,
@@ -350,29 +304,41 @@ class MultiTaskEncoder(L.LightningModule):
 
         del results
 
-        def _get_task_gradients() -> Dict[int, torch.Tensor]:
-            """Compute gradients for each task on the shared encoder parameters."""
-            task_gradients = {}
+        def _get_task_gradients(release_graph: bool) -> Dict[int, torch.Tensor]:
+            """Compute per-group gradients for PCGrad on the shared encoder.
+            
+            Losses are grouped into 5 logical categories instead of iterating
+            over each individual loss term, reducing backward passes from ~10
+            to 5 and halving peak GPU memory from retained computation graphs.
+            """
             shared_params = all_params['online_encoder']
+            grouped_losses = [
+                comparative_loss + predictive_loss,
+                reconstruction_loss,
+                downstream_attribute_loss.sum(),
+                task_sensitive_loss.sum(),
+                task_invariant_loss.sum() + variable_embedding_loss,
+            ]
 
-            for task_idx in range(self.num_tasks):
-                task_loss = loss[task_idx]
+            task_gradients = {}
+            for group_idx, group_loss in enumerate(grouped_losses):
+                is_last = (group_idx == len(grouped_losses) - 1)
                 task_grads = torch.autograd.grad(
-                    task_loss, 
-                    shared_params, 
-                    retain_graph=True, 
+                    group_loss,
+                    shared_params,
+                    retain_graph=not (is_last and release_graph),
                     create_graph=False,
                     allow_unused=True
                 )
 
                 flattened_grads = []
-                for grad in task_grads:
+                for grad, param in zip(task_grads, shared_params):
                     if grad is not None:
                         flattened_grads.append(grad.detach().flatten())
                     else:
-                        flattened_grads.append(torch.zeros(1, device=loss.device))
+                        flattened_grads.append(torch.zeros(param.numel(), device=loss.device))
 
-                task_gradients[task_idx] = torch.cat(flattened_grads)
+                task_gradients[group_idx] = torch.cat(flattened_grads)
 
             return task_gradients
 
@@ -425,46 +391,50 @@ class MultiTaskEncoder(L.LightningModule):
                     param.grad += final_gradient[start_idx:start_idx + size].reshape(shape)
                 start_idx += size
 
-        task_gradients = _get_task_gradients()
-        final_gradient = _apply_pcgrad(task_gradients).clone()
-
-        opt_model.zero_grad()
-        _apply_gradients_to_params(final_gradient)
-
+        # --- 1. Compute non-shared and attribute gradients first (graph stays alive) ---
         non_shared_params = (
             all_params["decoder"] + 
             all_params["online_projector"] + 
             all_params["online_predictor"]
         )
-
         non_shared_loss = reconstruction_loss + task_invariant_loss.sum()
-
         num_attribute_tasks = len(all_params['attribute_predictors'])
-        needs_retain = num_attribute_tasks > 0
 
+        non_shared_grads_list = None
         if len(non_shared_params) > 0:
-            non_shared_gradients = torch.autograd.grad(
+            non_shared_grads_list = torch.autograd.grad(
                 non_shared_loss,
                 non_shared_params,
                 allow_unused=True,
-                retain_graph=needs_retain
+                retain_graph=True
             )
 
-            for param, grad in zip(non_shared_params, non_shared_gradients):
-                if grad is not None:
-                    param.grad = grad
-
+        attribute_grads = {}
         for idx, (key, parameter_list) in enumerate(all_params['attribute_predictors'].items()):
-            is_last = (idx == num_attribute_tasks - 1)
             if len(parameter_list) > 0:
-                task_specific_gradients = torch.autograd.grad(
+                attribute_grads[key] = torch.autograd.grad(
                     downstream_attribute_loss[idx],
                     parameter_list,
                     allow_unused=True,
-                    retain_graph=not is_last
+                    retain_graph=True
                 )
-                
-                for param, grad in zip(parameter_list, task_specific_gradients):
+
+        # --- 2. PCGrad on grouped losses (last pass releases the computation graph) ---
+        task_gradients = _get_task_gradients(release_graph=True)
+        final_gradient = _apply_pcgrad(task_gradients).clone()
+
+        # --- 3. Apply all accumulated gradients ---
+        opt_model.zero_grad()
+        _apply_gradients_to_params(final_gradient)
+
+        if non_shared_grads_list is not None:
+            for param, grad in zip(non_shared_params, non_shared_grads_list):
+                if grad is not None:
+                    param.grad = grad
+
+        for key, parameter_list in all_params['attribute_predictors'].items():
+            if key in attribute_grads:
+                for param, grad in zip(parameter_list, attribute_grads[key]):
                     if grad is not None:
                         param.grad = grad
 
