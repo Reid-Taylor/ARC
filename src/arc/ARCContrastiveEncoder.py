@@ -105,36 +105,6 @@ class MultiTaskEncoder(L.LightningModule):
 
         downstream_attribute_loss = torch.stack(downstream_attribute_loss) * 10
 
-        # task_sensitive_loss = []
-        # for key in self.augmentation_representations.keys():
-        #     repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
-        #     repr_true:torch.Tensor = self.augmentation_representations[key]
-        #     repr_true = repr_true.expand_as(repr_diff)
-        #     repr_true = repr_true * batch[f'presence:{key}'].unsqueeze(dim=-1)
-        #     mse = F.mse_loss(repr_diff, repr_true)
-        #     task_sensitive_loss.append(mse)
-    
-        # task_sensitive_loss = torch.stack(task_sensitive_loss)
-
-        # task_invariant_loss = []
-        # for key in self.task_agnostics:
-        #     weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
-        #     if weights.sum()>0:
-        #         diff = results['standard']["embedding:contrastive_space:prediction"] - results['standard']["embedding:contrastive_space:target"]
-        #         task_invariant_loss.append(
-        #             (diff ** 2 * weights).sum() / weights.sum()
-        #         )
-        #     else: 
-        #         task_invariant_loss.append(torch.zeros(1, device=reconstruction_loss.device).squeeze())
-
-        # task_invariant_loss = torch.stack(task_invariant_loss)
-
-        # embedding_loss_terms = []
-        # for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-        #     embedding_loss_terms.append(loss_function(results["standard"]["embedding:original"]))
-        #     embedding_loss_terms.append(loss_function(results["mirrored"]["embedding:original"]))
-        # variable_embedding_loss = torch.stack(embedding_loss_terms).sum()
-
         return downstream_attribute_loss
 
     def _calculate_comparative_loss(self, results, batch) -> tuple[torch.Tensor, torch.Tensor]:
