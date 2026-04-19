@@ -29,39 +29,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.preprocessor = PreProcessor(**network_dimensions['PreProcessor'])
 
         self.online_encoder = Encoder(**network_dimensions["Encoder"])
-        self.target_encoder = Encoder(**network_dimensions["Encoder"])
-        self.target_encoder.load_state_dict(
-            self.online_encoder.state_dict()
-        )
-        for p in self.target_encoder.parameters():
-            p.requires_grad = False
-
-        self.online_projector = FullyConnectedLayer(**network_dimensions["Contrastive Projection"])
-        self.target_projector = FullyConnectedLayer(**network_dimensions["Contrastive Projection"])
-        self.target_projector.load_state_dict(
-            self.online_projector.state_dict()
-        )
-        for p in self.target_projector.parameters():
-            p.requires_grad = False
-        
-        self.online_predictor = FullyConnectedLayer(**network_dimensions["Contrastive Predictor"])
-
-        self.decoder = Decoder(**network_dimensions["Decoder"])
-
-        self.task_agnostics: list[str] = []
         self.downstream_attributes: list[str] = attribute_requirements
-        self.augmentation_representations = torch.nn.ParameterDict()
-
-        for key, value in task_type.items():
-            if value == "task_sensitive":
-                augmentation_vector = torch.randn(
-                        network_dimensions['Encoder'].get("dim_model",1),
-                    ).reshape(1,-1) * 0.5
-                self.augmentation_representations[key] = torch.nn.Parameter(augmentation_vector)
-            elif value =="task_insensitive":
-                self.task_agnostics.append(key)
-            else: 
-                raise ValueError(f"Unknown task type '{value}' for task '{key}'")
 
         for key in attribute_requirements:
             setattr(self, f"attribute:{key}", AttributeHead(
@@ -69,13 +37,9 @@ class MultiTaskEncoder(L.LightningModule):
             ))
 
         self.readable = {"grid_size":"Grid Size", "num_colors":"Number Colors"}
-        self.conflict_ratio = 0.0
-
-        self.num_tasks: int = 1 + len(self.downstream_attributes) + len(self.augmentation_representations) + len(self.task_agnostics) + 1
+        self.num_tasks: int = len(self.downstream_attributes)
         
-        self.transformation_embeddings_activation = activation
         self.lr: float = learning_rate
-        self.tau:float = tau
         self.chi:float = chi
 
         self.automatic_optimization: bool = False
@@ -83,16 +47,10 @@ class MultiTaskEncoder(L.LightningModule):
     def _get_parameters(self):
         params = {
             "online_encoder": [p for p in self.online_encoder.parameters() if p.requires_grad],
-            "online_projector": [p for p in self.online_projector.parameters() if p.requires_grad],
-            "decoder": [p for p in self.decoder.parameters() if p.requires_grad],
-            "target_encoder": list(self.target_encoder.parameters()),
-            "target_projector": list(self.target_projector.parameters()),
-            "online_predictor": [p for p in self.online_predictor.parameters() if p.requires_grad],
             "attribute_predictors": {
                 key: [p for p in getattr(self, f"attribute:{key}").parameters() if p.requires_grad]
                 for key in self.downstream_attributes
-            },
-            "transformation_representations": [p for p in self.augmentation_representations.parameters()]
+            }
         }
         return params
         
@@ -104,15 +62,7 @@ class MultiTaskEncoder(L.LightningModule):
         results_dict = {}
 
         results_dict['grid:encoded_original'] = grid_1
-        results_dict['grid:encoded_augmentation'] = grid_2
-
         results_dict['embedding:original'] = self.online_encoder(grid_1)
-        results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
-        results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
-
-        results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
-        results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
-        results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
 
         for attribute in self.downstream_attributes:
             results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
@@ -139,38 +89,7 @@ class MultiTaskEncoder(L.LightningModule):
             'per_problem': x['per_problem'],
         }
     
-    def _calculate_loss(self,results,batch) -> tuple[
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor,
-        torch.Tensor
-    ]:
-        # pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
-        # pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
-
-        # original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
-        # augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_augmentation']
-
-        # detectable_indicators:Float[torch.Tensor, "batch_size 1 1"] = torch.maximum(
-        #     torch.maximum(
-        #         batch['presence:roll'], 
-        #         batch['presence:scale_grid']
-        #         ),
-        #     batch['presence:isolate_color']
-        # ).view(-1,1,1)
-
-        # coalesced_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = torch.where(
-        #     detectable_indicators.bool(),
-        #     augmented_input,
-        #     original_input
-        # )
-
-        # reconstruction_loss = 0.5 * (
-        #     F.cross_entropy(pred_standard.view(-1, 11), original_input.long().view(-1)) 
-        #         + 
-        #     F.cross_entropy(pred_mirrored.view(-1, 11), coalesced_input.long().view(-1))
-        # )
+    def _calculate_loss(self,results,batch) -> torch.Tensor:
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
@@ -267,8 +186,6 @@ class MultiTaskEncoder(L.LightningModule):
         """
         downstream_attribute_loss = self._calculate_loss(results['stacked'], batch['stacked_batch'])
 
-        # comparative_loss, prediction_loss = self._calculate_comparative_loss(results, batch)
-
         return downstream_attribute_loss
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
@@ -332,20 +249,16 @@ class MultiTaskEncoder(L.LightningModule):
     def validation_step(self, batch, batch_idx):
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        comparative_loss, predictive_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+        downstream_attribute_loss = self.calculate_loss(results, batch)
 
-        loss = torch.cat([comparative_loss, predictive_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss], dim=0)
+        loss = torch.cat([downstream_attribute_loss], dim=0)
 
         loss_total = torch.sum(loss)
 
         log_dict = {
             "Validation/Validation Loss": loss_total.detach(),
-            "Validation/Reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
-            "Validation/Prediction": torch.exp(-1.0*predictive_loss.detach())
+            "Validation/Number of Colors": torch.exp(-1.0*loss_total.detach())
         }
-        
-        for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
-            log_dict[f"Validation/{self.readable[key]}"] = torch.exp(-1.0*loss_val.detach())
                 
         self.log_dict(log_dict, prog_bar=True)
 
@@ -354,9 +267,6 @@ class MultiTaskEncoder(L.LightningModule):
 
         main_optimizer = torch.optim.Adam([
             {'params': params.get("online_encoder"), 'lr': self.lr},
-            {'params': params.get("decoder"), 'lr': self.lr * 1.8},
-            {'params': params.get("online_projector"), 'lr': self.lr * 1.2},
-            {'params': params.get("online_predictor"), 'lr': self.lr * 1.2},
             {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10}
         ])
 
