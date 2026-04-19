@@ -184,7 +184,7 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
 
-        downstream_attribute_loss = torch.stack(downstream_attribute_loss)
+        downstream_attribute_loss = torch.stack(downstream_attribute_loss) * 10
 
         task_sensitive_loss = []
         for key in self.augmentation_representations.keys():
