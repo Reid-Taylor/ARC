@@ -146,31 +146,31 @@ class MultiTaskEncoder(L.LightningModule):
         torch.Tensor,
         torch.Tensor
     ]:
-        pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
-        pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
+        # pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
+        # pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
-        original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
-        augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_augmentation']
+        # original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
+        # augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_augmentation']
 
-        detectable_indicators:Float[torch.Tensor, "batch_size 1 1"] = torch.maximum(
-            torch.maximum(
-                batch['presence:roll'], 
-                batch['presence:scale_grid']
-                ),
-            batch['presence:isolate_color']
-        ).view(-1,1,1)
+        # detectable_indicators:Float[torch.Tensor, "batch_size 1 1"] = torch.maximum(
+        #     torch.maximum(
+        #         batch['presence:roll'], 
+        #         batch['presence:scale_grid']
+        #         ),
+        #     batch['presence:isolate_color']
+        # ).view(-1,1,1)
 
-        coalesced_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = torch.where(
-            detectable_indicators.bool(),
-            augmented_input,
-            original_input
-        )
+        # coalesced_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = torch.where(
+        #     detectable_indicators.bool(),
+        #     augmented_input,
+        #     original_input
+        # )
 
-        reconstruction_loss = 0.5 * (
-            F.cross_entropy(pred_standard.view(-1, 11), original_input.long().view(-1)) 
-                + 
-            F.cross_entropy(pred_mirrored.view(-1, 11), coalesced_input.long().view(-1))
-        )
+        # reconstruction_loss = 0.5 * (
+        #     F.cross_entropy(pred_standard.view(-1, 11), original_input.long().view(-1)) 
+        #         + 
+        #     F.cross_entropy(pred_mirrored.view(-1, 11), coalesced_input.long().view(-1))
+        # )
 
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
@@ -186,37 +186,37 @@ class MultiTaskEncoder(L.LightningModule):
 
         downstream_attribute_loss = torch.stack(downstream_attribute_loss) * 10
 
-        task_sensitive_loss = []
-        for key in self.augmentation_representations.keys():
-            repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
-            repr_true:torch.Tensor = self.augmentation_representations[key]
-            repr_true = repr_true.expand_as(repr_diff)
-            repr_true = repr_true * batch[f'presence:{key}'].unsqueeze(dim=-1)
-            mse = F.mse_loss(repr_diff, repr_true)
-            task_sensitive_loss.append(mse)
+        # task_sensitive_loss = []
+        # for key in self.augmentation_representations.keys():
+        #     repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
+        #     repr_true:torch.Tensor = self.augmentation_representations[key]
+        #     repr_true = repr_true.expand_as(repr_diff)
+        #     repr_true = repr_true * batch[f'presence:{key}'].unsqueeze(dim=-1)
+        #     mse = F.mse_loss(repr_diff, repr_true)
+        #     task_sensitive_loss.append(mse)
     
-        task_sensitive_loss = torch.stack(task_sensitive_loss)
+        # task_sensitive_loss = torch.stack(task_sensitive_loss)
 
-        task_invariant_loss = []
-        for key in self.task_agnostics:
-            weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
-            if weights.sum()>0:
-                diff = results['standard']["embedding:contrastive_space:prediction"] - results['standard']["embedding:contrastive_space:target"]
-                task_invariant_loss.append(
-                    (diff ** 2 * weights).sum() / weights.sum()
-                )
-            else: 
-                task_invariant_loss.append(torch.zeros(1, device=reconstruction_loss.device).squeeze())
+        # task_invariant_loss = []
+        # for key in self.task_agnostics:
+        #     weights = batch[f'presence:{key}'].unsqueeze(dim=-1).expand_as(results['standard']["embedding:contrastive_space:prediction"])
+        #     if weights.sum()>0:
+        #         diff = results['standard']["embedding:contrastive_space:prediction"] - results['standard']["embedding:contrastive_space:target"]
+        #         task_invariant_loss.append(
+        #             (diff ** 2 * weights).sum() / weights.sum()
+        #         )
+        #     else: 
+        #         task_invariant_loss.append(torch.zeros(1, device=reconstruction_loss.device).squeeze())
 
-        task_invariant_loss = torch.stack(task_invariant_loss)
+        # task_invariant_loss = torch.stack(task_invariant_loss)
 
-        embedding_loss_terms = []
-        for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
-            embedding_loss_terms.append(loss_function(results["standard"]["embedding:original"]))
-            embedding_loss_terms.append(loss_function(results["mirrored"]["embedding:original"]))
-        variable_embedding_loss = torch.stack(embedding_loss_terms).sum()
+        # embedding_loss_terms = []
+        # for loss_function in [partial(anti_sparsity_loss, threshold=0.1, lambda_sparse=0.1)]:
+        #     embedding_loss_terms.append(loss_function(results["standard"]["embedding:original"]))
+        #     embedding_loss_terms.append(loss_function(results["mirrored"]["embedding:original"]))
+        # variable_embedding_loss = torch.stack(embedding_loss_terms).sum()
 
-        return reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss
+        return downstream_attribute_loss
 
     def _calculate_comparative_loss(self, results, batch) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -265,11 +265,11 @@ class MultiTaskEncoder(L.LightningModule):
         Both forward results and batch tensors are already concatenated,
         so no collection or concatenation is needed here.
         """
-        reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self._calculate_loss(results['stacked'], batch['stacked_batch'])
+        downstream_attribute_loss = self._calculate_loss(results['stacked'], batch['stacked_batch'])
 
-        comparative_loss, prediction_loss = self._calculate_comparative_loss(results, batch)
+        # comparative_loss, prediction_loss = self._calculate_comparative_loss(results, batch)
 
-        return comparative_loss.view(1), prediction_loss.view(1), reconstruction_loss.view(1), downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss.view(1)
+        return downstream_attribute_loss
 
     def adjust_transformation_embeddings(self, embedding_learning_rate, loss):
         for idx, (key, parameter) in enumerate(self.augmentation_representations.items()):
@@ -296,118 +296,9 @@ class MultiTaskEncoder(L.LightningModule):
         all_params = self._get_parameters()
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
-        comparative_loss, predictive_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self.calculate_loss(results, batch)
+        downstream_attribute_loss = self.calculate_loss(results, batch)
 
-        loss = torch.cat([comparative_loss, predictive_loss, reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss], dim=0)
-
-        loss_total = torch.sum(loss)
-
-        del results
-
-        def _get_task_gradients(release_graph: bool) -> Dict[int, torch.Tensor]:
-            """Compute per-group gradients for PCGrad on the shared encoder.
-            
-            Losses are grouped into 5 logical categories instead of iterating
-            over each individual loss term, reducing backward passes from ~10
-            to 5 and halving peak GPU memory from retained computation graphs.
-            """
-            shared_params = all_params['online_encoder']
-            grouped_losses = [
-                comparative_loss + predictive_loss,
-                reconstruction_loss,
-                downstream_attribute_loss.sum(),
-                task_sensitive_loss.sum(),
-                task_invariant_loss.sum() + variable_embedding_loss,
-            ]
-
-            task_gradients = {}
-            for group_idx, group_loss in enumerate(grouped_losses):
-                is_last = (group_idx == len(grouped_losses) - 1)
-                task_grads = torch.autograd.grad(
-                    group_loss,
-                    shared_params,
-                    retain_graph=not (is_last and release_graph),
-                    create_graph=False,
-                    allow_unused=True
-                )
-
-                flattened_grads = []
-                for grad, param in zip(task_grads, shared_params):
-                    if grad is not None:
-                        flattened_grads.append(grad.detach().flatten())
-                    else:
-                        flattened_grads.append(torch.zeros(param.numel(), device=loss.device))
-
-                task_gradients[group_idx] = torch.cat(flattened_grads)
-
-            return task_gradients
-
-        def _apply_pcgrad(task_gradients: Dict[int, torch.Tensor]) -> torch.Tensor:
-            """Apply PCGrad algorithm to resolve gradient conflicts."""
-            num_tasks = len(task_gradients)
-            projected_gradients = {i: task_gradients[i].clone() for i in range(num_tasks)}
-
-            conflicts = 0
-            total_comparisons = 0
-
-            for i in range(num_tasks):
-                for j in torch.randperm(num_tasks):
-                    if i != j:
-                        g_i = projected_gradients[i]
-                        g_j = task_gradients[j.item()]
-
-                        dot_product = torch.dot(g_i, g_j)
-                        norm_i = torch.norm(g_i, p=2)
-                        norm_j = torch.norm(g_j, p=2)
-
-                        total_comparisons += 1
-                        if norm_i > 0 and norm_j > 0:
-                            cosine_sim = dot_product / (norm_i * norm_j)
-
-                            if cosine_sim < 0:
-                                conflicts += 1
-                                projection = (dot_product / (norm_j ** 2)) * g_j
-                                projected_gradients[i] = g_i - projection
-
-            if total_comparisons > 0:
-                self.conflict_ratio = conflicts / total_comparisons if total_comparisons > 0 else 0.0
-
-            final_gradient = torch.stack(list(projected_gradients.values())).mean(dim=0)
-            return final_gradient
-
-        def _apply_gradients_to_params(final_gradient: torch.Tensor):
-            if torch.isnan(final_gradient).any():
-                print("\nWARNING: NaN gradients detected in PCGrad\n")
-                return
-            shared_params = all_params['online_encoder']
-            param_shapes = [p.shape for p in shared_params]
-            param_sizes = [p.numel() for p in shared_params]
-
-            start_idx = 0
-            for param, size, shape in zip(shared_params, param_sizes, param_shapes):
-                if param.grad is None:
-                    param.grad = final_gradient[start_idx:start_idx + size].reshape(shape)
-                else:
-                    param.grad += final_gradient[start_idx:start_idx + size].reshape(shape)
-                start_idx += size
-
-        # --- 1. Compute non-shared and attribute gradients first (graph stays alive) ---
-        non_shared_params = (
-            all_params["decoder"] + 
-            all_params["online_projector"] + 
-            all_params["online_predictor"]
-        )
-        non_shared_loss = reconstruction_loss + task_invariant_loss.sum()
-        num_attribute_tasks = len(all_params['attribute_predictors'])
-
-        non_shared_grads_list = None
-        if len(non_shared_params) > 0:
-            non_shared_grads_list = torch.autograd.grad(
-                non_shared_loss,
-                non_shared_params,
-                allow_unused=True,
-                retain_graph=True
-            )
+        loss_total = torch.sum(downstream_attribute_loss)
 
         attribute_grads = {}
         for idx, (key, parameter_list) in enumerate(all_params['attribute_predictors'].items()):
@@ -419,18 +310,7 @@ class MultiTaskEncoder(L.LightningModule):
                     retain_graph=True
                 )
 
-        # --- 2. PCGrad on grouped losses (last pass releases the computation graph) ---
-        task_gradients = _get_task_gradients(release_graph=True)
-        final_gradient = _apply_pcgrad(task_gradients).clone()
-
-        # --- 3. Apply all accumulated gradients ---
         opt_model.zero_grad()
-        _apply_gradients_to_params(final_gradient)
-
-        if non_shared_grads_list is not None:
-            for param, grad in zip(non_shared_params, non_shared_grads_list):
-                if grad is not None:
-                    param.grad = grad
 
         for key, parameter_list in all_params['attribute_predictors'].items():
             if key in attribute_grads:
@@ -442,37 +322,11 @@ class MultiTaskEncoder(L.LightningModule):
 
         opt_model.step()
 
-        embedding_learning_rate = 0.0
-
-        if self.current_epoch >= self.transformation_embeddings_activation:
-            embedding_learning_rate = self.chi**(self.current_epoch)
-            self.adjust_transformation_embeddings(embedding_learning_rate, task_sensitive_loss)
-
-        for param_o, param_t in zip(all_params.get("online_encoder"), all_params.get("target_encoder")):
-            param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
-        for param_o, param_t in zip(all_params.get("online_projector"), all_params.get("target_projector")):
-            param_t.data = self.tau * param_t.data + (1 - self.tau) * param_o.data
-
         log_dict = {
             "Train/Total Loss": loss_total.detach(),
-            "Probability/Reconstruction": torch.exp(-1.0*reconstruction_loss.detach()),
-            "Probability/Prediction": torch.exp(-1.0*predictive_loss.detach()),
-
-            "Train/Reconstruction CE": reconstruction_loss.detach(),
-            "Train/Prediction CE": predictive_loss.detach(),
-            "Train/Contrastive MSE": comparative_loss.detach().mean(),
-            "Train/Transformation Map MSE": task_sensitive_loss.detach().mean(),
-            "Train/Task Ignorance MSE": task_invariant_loss.detach().mean(),
-
-            "Train/Anti Sparsity Loss": variable_embedding_loss.detach(),
-
-            "Metric/Embedding LR": embedding_learning_rate,
-            "Metric/Surgery Ratio": self.conflict_ratio
+            "Probability/Number of Colors": torch.exp(-1.0*loss_total.detach())
         }
-        
-        for key, loss_val in zip(self.downstream_attributes,downstream_attribute_loss):
-            log_dict[f"Probability/{self.readable[key]}"] = torch.exp(-1.0*loss_val.detach())
-                
+                        
         self.log_dict(log_dict, prog_bar=True)
 
     def validation_step(self, batch, batch_idx):

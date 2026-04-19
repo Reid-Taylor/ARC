@@ -142,7 +142,7 @@ def create_dataloader(config: Dict[str, Any]):
 def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
     """Create and initialize the model."""
     encoder_config = config['model']['encoder']
-    downstream_attributes_config = config['model']['encoder']['downstream_attributes']
+    downstream_attributes_config = config['model']['encoder']['downstream_attributes']['num_colors']
     contrastive_attributes_config = config['model']['encoder']['contrastive_attributes']
     shared_model_config = config['model']['shared']
     learning_rate: float = config['model']['encoder']['learning_rate']
