@@ -180,30 +180,14 @@ class MultiTaskEncoder(L.LightningModule):
     
     def training_step(self, batch):
         opt_model = self.optimizers()
-        all_params = self._get_parameters()
         results: Dict[str, Float[torch.Tensor, "..."]] = self.forward(batch)
 
         downstream_attribute_loss = self.calculate_loss(results, batch)
 
         loss_total = torch.sum(downstream_attribute_loss)
 
-        attribute_grads = {}
-        for idx, (key, parameter_list) in enumerate(all_params['attribute_predictors'].items()):
-            if len(parameter_list) > 0:
-                attribute_grads[key] = torch.autograd.grad(
-                    downstream_attribute_loss[idx],
-                    parameter_list,
-                    allow_unused=True,
-                    retain_graph=True
-                )
-
         opt_model.zero_grad()
-
-        for key, parameter_list in all_params['attribute_predictors'].items():
-            if key in attribute_grads:
-                for param, grad in zip(parameter_list, attribute_grads[key]):
-                    if grad is not None:
-                        param.grad = grad
+        loss_total.backward()
 
         self.clip_gradients(opt_model,gradient_clip_val=0.5, gradient_clip_algorithm="norm")
 
