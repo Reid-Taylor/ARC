@@ -17,8 +17,10 @@ class PreProcessor(torch.nn.Module):
         self.dim_model:int = dim_model
         self.sequence_length:int = int(30 * 30 // self.p ** 2 + 1)
 
+        self.token_embedding = torch.nn.Embedding(num_embeddings=11, embedding_dim = dim_model)
+
         self.embedding_layer = torch.nn.Linear(
-            self.p**2,
+            self.p**2 * self.dim_model,
             self.dim_model,
             bias=False
         )
@@ -39,8 +41,12 @@ class PreProcessor(torch.nn.Module):
         seq_len = height * width // self.p**2
         assert seq_len + 1 == self.sequence_length, f"Incorrect data shapes, PreProcessor Sequence Length {self.sequence_length} and {seq_len + 1}"
 
-        patches:Float[torch.Tensor, "batch_size initial_sequence dim_model"] = padded_grid.reshape((batch_size, seq_len, self.p**2))
-        class_tokens = torch.zeros(batch_size, 1, self.p**2, device=padded_grid.device)
+        grid_tokens = padded_grid.long()  # [B, 30, 30] int
+        token_embs = self.token_embedding(grid_tokens)  # [B, 30, 30, dim_model]
+        patches = token_embs.reshape(batch_size, seq_len, self.p**2 * self.dim_model)
+
+        # patches:Float[torch.Tensor, "batch_size initial_sequence dim_model"] = padded_grid.reshape((batch_size, seq_len, self.p**2))
+        class_tokens = torch.zeros(batch_size, 1, self.p**2 * self.dim_model, device=padded_grid.device)
 
         patches = torch.cat((class_tokens, patches), dim=1)
 
@@ -255,15 +261,22 @@ class AttributeHead(torch.nn.Module):
 
         self.channels = output_channels # Accessed in the ARCEncoder training step
 
-        self.fc_out = FullyConnectedLayer(
+        self.fc_middle = FullyConnectedLayer(
             input_size=input_size,
+            output_size=output_dim*self.channels,
+            activation="gelu"
+        )
+
+        self.fc_out = FullyConnectedLayer(
+            input_size=output_dim*self.channels,
             output_size=output_dim*self.channels,
             activation="identity"
         )
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
 
-        final_layer = self.fc_out(x)
+        middle = self.fc_middle(x)
+        final_layer = self.fc_out(middle)
 
         return final_layer
 
