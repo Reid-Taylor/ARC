@@ -20,7 +20,7 @@ class PreProcessor(torch.nn.Module):
         self.token_embedding = torch.nn.Embedding(num_embeddings=11, embedding_dim = dim_model)
 
         self.embedding_layer = torch.nn.Linear(
-            self.p**2,
+            self.p**2 * self.dim_model,
             self.dim_model,
             bias=False
         )
