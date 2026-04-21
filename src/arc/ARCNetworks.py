@@ -9,16 +9,19 @@ from functools import partial
 class PreProcessor(torch.nn.Module):
     """
     A data preprocessor with mechanics inspired by the ViT paper, 2021.
+    Accepts one-hot encoded grids of shape [batch_size, num_colors, 30, 30].
     """
     @beartype
-    def __init__(self, patch_len:int, dim_model:int):
+    def __init__(self, patch_len:int, dim_model:int, num_colors:int=10):
         super().__init__()
         self.p:int = patch_len
         self.dim_model:int = dim_model
+        self.num_colors:int = num_colors
         self.sequence_length:int = int(30 * 30 // self.p ** 2 + 1)
+        self.patch_dim:int = self.num_colors * self.p ** 2
 
         self.embedding_layer = torch.nn.Linear(
-            self.p**2,
+            self.patch_dim,
             self.dim_model,
             bias=False
         )
@@ -29,19 +32,24 @@ class PreProcessor(torch.nn.Module):
         ))
     
     @beartype
-    def forward(self, padded_grid:Float[torch.Tensor, "batch_size 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size num_colors 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
         """
-        The processor expects the data presented as a 30x30 grid of float-cast discrete integer values.
-
-        This will return the linear embeddings of the patches prepended by a [CLS] token, and then summed against 1D sinusoidal positional encodings. 
+        Accepts a one-hot encoded grid [batch_size, num_colors, 30, 30].
+        Extracts patches of shape [p, p] per channel, flattens to [num_colors * p * p],
+        prepends a [CLS] token, and applies linear embedding + positional encoding.
         """
-        batch_size, height, width = padded_grid.shape
+        batch_size, C, height, width = padded_grid.shape
         seq_len = height * width // self.p**2
         assert seq_len + 1 == self.sequence_length, f"Incorrect data shapes, PreProcessor Sequence Length {self.sequence_length} and {seq_len + 1}"
 
-        patches:Float[torch.Tensor, "batch_size initial_sequence dim_model"] = padded_grid.reshape((batch_size, seq_len, self.p**2))
-        class_tokens = torch.zeros(batch_size, 1, self.p**2, device=padded_grid.device)
+        # Reshape: [B, C, 30, 30] -> [B, C, H_patches, p, W_patches, p]
+        x = padded_grid.reshape(batch_size, C, height // self.p, self.p, width // self.p, self.p)
+        # -> [B, H_patches, W_patches, C, p, p]
+        x = x.permute(0, 2, 4, 1, 3, 5)
+        # -> [B, seq_len, C * p * p]
+        patches = x.reshape(batch_size, seq_len, self.patch_dim)
 
+        class_tokens = torch.zeros(batch_size, 1, self.patch_dim, device=padded_grid.device)
         patches = torch.cat((class_tokens, patches), dim=1)
 
         result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) + self.positional_encoding
