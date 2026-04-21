@@ -136,7 +136,7 @@ class ARCGrid:
     def _apply_color_map(self) -> None:
         color_map_tensor = torch.randperm(10, dtype=torch.int8)
 
-        self.augmented_grid = color_map_tensor[self.augmented_grid.add(-1).long()].float() + 1
+        self.augmented_grid = color_map_tensor[self.augmented_grid.add(-1).long()].float()
     
     @beartype
     def _apply_roll(self) -> None:
