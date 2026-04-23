@@ -129,7 +129,7 @@ class SelfAttentionHead(torch.nn.Module):
 
         attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
         attention_output /= dim_model**0.5
-        attention_output = F.softmax(attention_output, dim=-1)
+        # attention_output = F.softmax(attention_output, dim=-1)
 
         return torch.einsum("bqk,bkd->bqd",attention_output, value)
 
