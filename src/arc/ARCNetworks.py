@@ -255,7 +255,7 @@ class AttributeHead(torch.nn.Module):
     """
     A network which predicts specific attributes from the latent representation.
     """
-    def __init__(self, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11]):
+    def __init__(self, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11], dropout:float=0.3):
         super().__init__()
 
         output_dim, output_channels = output_sizes
@@ -270,11 +270,12 @@ class AttributeHead(torch.nn.Module):
             activation_function=F.gelu,
             use_bias=True
         )
+        self.dropout = torch.nn.Dropout(p=dropout)
         self.fc_out = torch.nn.Linear(input_size, output_dim * self.channels)
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
 
-        return self.fc_out(self.mlp(x))
+        return self.fc_out(self.dropout(self.mlp(x)))
 
 class UniversalTransformerEncoder(torch.nn.Module):
     """

@@ -103,7 +103,7 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
 
-        downstream_attribute_loss = torch.stack(downstream_attribute_loss) * 10
+        downstream_attribute_loss = torch.stack(downstream_attribute_loss)
 
         return downstream_attribute_loss
 
@@ -219,9 +219,9 @@ class MultiTaskEncoder(L.LightningModule):
     def configure_optimizers(self):
         params = self._get_parameters()
 
-        main_optimizer = torch.optim.Adam([
-            {'params': params.get("online_encoder"), 'lr': self.lr},
-            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10}
+        main_optimizer = torch.optim.AdamW([
+            {'params': params.get("online_encoder"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 2, 'weight_decay': 1e-4}
         ])
 
         return main_optimizer
