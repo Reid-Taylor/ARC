@@ -263,17 +263,17 @@ class AttributeHead(torch.nn.Module):
 
         self.channels = output_channels # Accessed in the ARCEncoder training step
 
-        self.fc_out = FullyConnectedLayer(
-            input_size=input_size,
-            output_size=output_dim*self.channels,
-            activation="identity"
+        self.mlp = MLP(
+            num_layers=2,
+            dim_model=input_size,
+            activation_function=F.gelu,
+            use_bias=True
         )
+        self.fc_out = torch.nn.Linear(input_size, output_dim * self.channels)
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
 
-        final_layer = self.fc_out(x)
-
-        return final_layer
+        return self.fc_out(self.mlp(x))
 
 class UniversalTransformerEncoder(torch.nn.Module):
     """
@@ -434,7 +434,7 @@ class Decoder(torch.nn.Module):
         super().__init__()
 
         self.mlp = MLP(num_layers=4, dim_model=input_size, use_bias=True)
-        self.fc = FullyConnectedLayer(input_size, output_size*11, activation="identity")
+        self.fc = torch.nn.Linear(input_size, output_size * 11)
 
     def forward(self, x:Float[torch.Tensor, "batch_size dim_model"]) -> Float[torch.Tensor, "batch_size 900 11"]:
 
