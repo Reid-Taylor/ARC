@@ -237,6 +237,4 @@ class MultiTaskEncoder(L.LightningModule):
             {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr, 'weight_decay': 1e-4}
         ])
 
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(main_optimizer, T_max=self.trainer.max_epochs)
-
-        return [main_optimizer], [scheduler]
+        return main_optimizer
