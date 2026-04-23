@@ -1,6 +1,6 @@
 GCP_ZONE ?= us-central1-f
 VM_INSTANCE_NAME ?= instance-20260422-020511
-MACHINE_TYPE ?= e2-highmem-128
+MACHINE_TYPE ?= e2-highmem-16
 DISK_SIZE ?= 120GB
 
 # Training parameters
@@ -13,9 +13,7 @@ gcp-create:
 		--project amplified-hull-484821-b5 \
 		--zone=$(GCP_ZONE) \
 		--machine-type $(MACHINE_TYPE) \
-		--boot-disk-size $(DISK_SIZE) \
-		--maintenance-policy TERMINATE \
-		--restart-on-failure \
+		--boot-disk-size $(DISK_SIZE) 
 
 gcp-start:
 	gcloud compute instances start $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
@@ -88,6 +86,12 @@ clean:
 	rm -rf ./models/test
 	rm -rf ./logs/test
 	rm -rf lightning_logs/
+
+clean-tmp:
+	@echo "Cleaning up local artifacts..."
+	rm -rf ./models/test/tmp
+	rm -rf ./logs/test/tmp
+	rm -rf lightning_logs/tmp
 
 help:
 	@echo "Available targets:"

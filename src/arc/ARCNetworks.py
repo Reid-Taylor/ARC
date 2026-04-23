@@ -203,7 +203,8 @@ class Encoder(torch.nn.Module):
         self.dim_model = dim_model
         
         self.mlp = torch.nn.ModuleList([MLP(dim_model=self.dim_model, use_bias=True) for _ in range(self.num_layers)])
-        self.layer_norm = torch.nn.LayerNorm(self.dim_model)
+        # self.layer_norm = torch.nn.LayerNorm(self.dim_model)
+        self.layer_norm = torch.nn.Identity(self.dim_model)
         self.msa = torch.nn.ModuleList([MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)])
 
     def forward(self, processed_grid_repr):
