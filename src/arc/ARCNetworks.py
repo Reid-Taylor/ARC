@@ -221,8 +221,7 @@ class Encoder(torch.nn.Module):
             attended = self.attn_dropout[idx](self.msa[idx](self.layer_norm(output))) + output
             output = self.mlp_dropout[idx](self.mlp[idx](self.layer_norm(attended))) + attended
 
-        # Mean-pool over all sequence positions instead of CLS-token-only
-        output:Float[torch.Tensor, "batch_size D"] = self.layer_norm(output.mean(dim=1))
+        output:Float[torch.Tensor, "batch_size 1 D"] = self.layer_norm(output[:,0,:])
 
         return output
 
