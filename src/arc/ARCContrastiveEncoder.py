@@ -91,34 +91,22 @@ class MultiTaskEncoder(L.LightningModule):
     
     def _calculate_loss(self,results,batch) -> torch.Tensor:
 
-        # Mask: augmentations that preserve num_colors (all except isolate_color)
-        color_preserving_mask = (batch['presence:isolate_color'].view(-1) == 0)
-
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             channel_dim = getattr(self, f"attribute:{key}").channels
-            targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
-
-            # Standard pass loss (all samples)
             attr_pred = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
-            standard_loss = F.cross_entropy(attr_pred, targets, label_smoothing=0.1)
-
-            # Mirrored pass loss (only color-preserving augmentations)
-            mirrored_pred = results['mirrored'][f"attribute:{key}"].view(-1, channel_dim)
-            if color_preserving_mask.any():
-                mirrored_loss = F.cross_entropy(
-                    mirrored_pred[color_preserving_mask],
-                    targets[color_preserving_mask],
-                    label_smoothing=0.1
+            targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
+            downstream_attribute_loss.append(
+                F.cross_entropy(
+                    attr_pred,
+                    targets
                 )
-            else:
-                mirrored_loss = torch.tensor(0.0, device=standard_loss.device)
-
-            downstream_attribute_loss.append(standard_loss + mirrored_loss)
+            )
 
         downstream_attribute_loss = torch.stack(downstream_attribute_loss)
 
         return downstream_attribute_loss
+
 
     def _calculate_comparative_loss(self, results, batch) -> tuple[torch.Tensor, torch.Tensor]:
         """
