@@ -91,17 +91,30 @@ class MultiTaskEncoder(L.LightningModule):
     
     def _calculate_loss(self,results,batch) -> torch.Tensor:
 
+        # Mask: augmentations that preserve num_colors (all except isolate_color)
+        color_preserving_mask = (batch['presence:isolate_color'].view(-1) == 0)
+
         downstream_attribute_loss = []
         for key in self.downstream_attributes:
             channel_dim = getattr(self, f"attribute:{key}").channels
-            attr_pred = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
             targets = batch[f"attribute:{key}"].add(-1).long().view(-1)
-            downstream_attribute_loss.append(
-                F.cross_entropy(
-                    attr_pred,
-                    targets
+
+            # Standard pass loss (all samples)
+            attr_pred = results['standard'][f"attribute:{key}"].view(-1, channel_dim)
+            standard_loss = F.cross_entropy(attr_pred, targets, label_smoothing=0.1)
+
+            # Mirrored pass loss (only color-preserving augmentations)
+            mirrored_pred = results['mirrored'][f"attribute:{key}"].view(-1, channel_dim)
+            if color_preserving_mask.any():
+                mirrored_loss = F.cross_entropy(
+                    mirrored_pred[color_preserving_mask],
+                    targets[color_preserving_mask],
+                    label_smoothing=0.1
                 )
-            )
+            else:
+                mirrored_loss = torch.tensor(0.0, device=standard_loss.device)
+
+            downstream_attribute_loss.append(standard_loss + mirrored_loss)
 
         downstream_attribute_loss = torch.stack(downstream_attribute_loss)
 
@@ -221,7 +234,9 @@ class MultiTaskEncoder(L.LightningModule):
 
         main_optimizer = torch.optim.AdamW([
             {'params': params.get("online_encoder"), 'lr': self.lr, 'weight_decay': 1e-4},
-            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 2, 'weight_decay': 1e-4}
+            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr, 'weight_decay': 1e-4}
         ])
 
-        return main_optimizer
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(main_optimizer, T_max=self.trainer.max_epochs)
+
+        return [main_optimizer], [scheduler]

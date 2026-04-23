@@ -196,7 +196,7 @@ class MLP(torch.nn.Module):
         return output
 
 class Encoder(torch.nn.Module):
-    def __init__(self, n_heads, num_layers, dim_model):
+    def __init__(self, n_heads, num_layers, dim_model, dropout=0.1):
         super().__init__()
         self.n_heads = n_heads
         self.num_layers = num_layers
@@ -206,6 +206,8 @@ class Encoder(torch.nn.Module):
         # self.layer_norm = torch.nn.LayerNorm(self.dim_model)
         self.layer_norm = torch.nn.Identity(self.dim_model)
         self.msa = torch.nn.ModuleList([MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)])
+        self.attn_dropout = torch.nn.ModuleList([torch.nn.Dropout(p=dropout) for _ in range(self.num_layers)])
+        self.mlp_dropout = torch.nn.ModuleList([torch.nn.Dropout(p=dropout) for _ in range(self.num_layers)])
 
     def forward(self, processed_grid_repr):
         """
@@ -216,10 +218,11 @@ class Encoder(torch.nn.Module):
         output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
 
         for idx in range(self.num_layers):
-            attended = self.msa[idx](self.layer_norm(output)) + output
-            output = self.mlp[idx](self.layer_norm(attended)) + attended
+            attended = self.attn_dropout[idx](self.msa[idx](self.layer_norm(output))) + output
+            output = self.mlp_dropout[idx](self.mlp[idx](self.layer_norm(attended))) + attended
 
-        output:Float[torch.Tensor, "batch_size 1 D"] = self.layer_norm(output[:,0,:])
+        # Mean-pool over all sequence positions instead of CLS-token-only
+        output:Float[torch.Tensor, "batch_size D"] = self.layer_norm(output.mean(dim=1))
 
         return output
 
