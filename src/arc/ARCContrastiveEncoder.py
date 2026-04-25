@@ -5,7 +5,7 @@ import lightning as L
 import torch
 from torch.nn import functional as F
 from jaxtyping import Float
-from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor
+from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor, ChannelSummary
 from src.arc.ARCUtils import anti_sparsity_loss
 from functools import partial
 
@@ -29,6 +29,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.preprocessor = PreProcessor(**network_dimensions['PreProcessor'])
 
         self.online_encoder = Encoder(**network_dimensions["Encoder"])
+        self.channel_summary = ChannelSummary(**network_dimensions["Channel Summary"])
         self.downstream_attributes: list[str] = attribute_requirements
 
         for key in attribute_requirements:
@@ -47,6 +48,7 @@ class MultiTaskEncoder(L.LightningModule):
     def _get_parameters(self):
         params = {
             "online_encoder": [p for p in self.online_encoder.parameters() if p.requires_grad],
+            "channel_summary": [p for p in self.channel_summary.parameters() if p.requires_grad],
             "attribute_predictors": {
                 key: [p for p in getattr(self, f"attribute:{key}").parameters() if p.requires_grad]
                 for key in self.downstream_attributes
@@ -54,15 +56,17 @@ class MultiTaskEncoder(L.LightningModule):
         }
         return params
         
-    def _forward_grid(self, grid_1, grid_2):
+    def _forward_grid(self, grid_1, grid_2, channel_features):
         """
         This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results.
         Accepts batched tensors — grid_1 and grid_2 can have arbitrary batch dimension.
+        channel_features: [B, channel_summary_dim] from the ChannelSummary bypass.
         """
         results_dict = {}
 
         results_dict['grid:encoded_original'] = grid_1
-        results_dict['embedding:original'] = self.online_encoder(grid_1)
+        encoder_embedding = self.online_encoder(grid_1)
+        results_dict['embedding:original'] = torch.cat([encoder_embedding, channel_features], dim=-1)
 
         for attribute in self.downstream_attributes:
             results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
@@ -81,8 +85,11 @@ class MultiTaskEncoder(L.LightningModule):
         encoded_originals = self.preprocessor(stacked['grid:padded_original'])
         encoded_augmentations = self.preprocessor(stacked['grid:padded_augmentation'])
 
-        standard = self._forward_grid(encoded_originals, encoded_augmentations)
-        mirrored = self._forward_grid(encoded_augmentations, encoded_originals)
+        channel_features_orig = self.channel_summary(stacked['grid:padded_original'])
+        channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation'])
+
+        standard = self._forward_grid(encoded_originals, encoded_augmentations, channel_features_orig)
+        mirrored = self._forward_grid(encoded_augmentations, encoded_originals, channel_features_aug)
 
         return {
             'stacked': {'standard': standard, 'mirrored': mirrored},
@@ -222,6 +229,7 @@ class MultiTaskEncoder(L.LightningModule):
 
         main_optimizer = torch.optim.AdamW([
             {'params': params.get("online_encoder"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': params.get("channel_summary"), 'lr': self.lr, 'weight_decay': 1e-4},
             {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr, 'weight_decay': 1e-4}
         ])
 

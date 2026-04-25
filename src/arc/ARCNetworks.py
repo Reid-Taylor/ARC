@@ -251,6 +251,27 @@ class Encoder(torch.nn.Module):
         return output
 
 @beartype
+class ChannelSummary(torch.nn.Module):
+    """
+    Lightweight bypass that extracts per-channel global features directly from
+    the one-hot grid [B, 10, 30, 30], preserving the channel structure that
+    ViT patching destroys. Produces a compact summary for channel-level tasks
+    such as counting distinct colors.
+    """
+    def __init__(self, num_colors:int=10, output_dim:int=16):
+        super().__init__()
+        self.max_pool = torch.nn.AdaptiveMaxPool2d(1)
+        self.avg_pool = torch.nn.AdaptiveAvgPool2d(1)
+        self.fc = torch.nn.Linear(num_colors * 2, output_dim)
+
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size num_colors 30 30"]) -> Float[torch.Tensor, "batch_size output_dim"]:
+        max_features = self.max_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        avg_features = self.avg_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        combined = torch.cat([max_features, avg_features], dim=-1)         # [B, 20]
+        return F.gelu(self.fc(combined))                                   # [B, output_dim]
+
+
+@beartype
 class FullyConnectedLayer(torch.nn.Module):
     """
     A fully connected layer which predicts specific attributes from the latent representation.
