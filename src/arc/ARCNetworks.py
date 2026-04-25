@@ -17,7 +17,10 @@ class PreProcessor(torch.nn.Module):
         self.p:int = patch_len
         self.dim_model:int = dim_model
         self.num_colors:int = num_colors
-        self.sequence_length:int = int(30 * 30 // self.p ** 2 + 1)
+        self.grid_size:int = 30
+        self.h_patches:int = self.grid_size // self.p
+        self.w_patches:int = self.grid_size // self.p
+        self.sequence_length:int = self.h_patches * self.w_patches + 1
         self.patch_dim:int = self.num_colors * self.p ** 2
 
         self.embedding_layer = torch.nn.Linear(
@@ -26,8 +29,9 @@ class PreProcessor(torch.nn.Module):
             bias=False
         )
 
-        self.register_buffer('positional_encoding', self.pos_encoding(
-            position=self.sequence_length, 
+        self.register_buffer('positional_encoding', self.pos_encoding_2d(
+            h_patches=self.h_patches,
+            w_patches=self.w_patches,
             d_model=self.dim_model
         ))
     
@@ -52,30 +56,51 @@ class PreProcessor(torch.nn.Module):
         class_tokens = torch.zeros(batch_size, 1, self.patch_dim, device=padded_grid.device)
         patches = torch.cat((class_tokens, patches), dim=1)
 
-        result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) + self.positional_encoding
+        result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) #+ self.positional_encoding
 
         return result
 
     @beartype
     @staticmethod
-    def pos_encoding(position:int, d_model:int) -> Float[torch.Tensor, "seq_len dim_model"]:
+    def pos_encoding_2d(h_patches:int, w_patches:int, d_model:int) -> Float[torch.Tensor, "seq_len dim_model"]:
         """
-        This function accepts two parameters:
-            - position: Sequence Length
-            - d_model: The dimension of the embedding vector
+        Compute 2D sinusoidal positional encoding for a grid of patches.
+        Uses the first d_model//2 dimensions for row position and the
+        remaining dimensions for column position. A zero vector is
+        prepended for the [CLS] token.
         """
-        if position == 0 or d_model <= 0:
-            return -1
+        assert d_model % 2 == 0, "d_model must be even for 2D positional encoding"
+        d_half = d_model // 2
 
-        pos = torch.arange(position, dtype=torch.float32).reshape(position,1)
-        ind = torch.arange(d_model, dtype=torch.float32).reshape(1,d_model)
+        rows = torch.arange(h_patches, dtype=torch.float32).unsqueeze(1)
+        cols = torch.arange(w_patches, dtype=torch.float32).unsqueeze(1)
+        dim_idx = torch.arange(d_half, dtype=torch.float32).unsqueeze(0)
 
-        angle_rads = pos / torch.pow(10000, (2 * (ind//2)) / d_model)
+        denom = torch.pow(10000.0, (2.0 * (dim_idx // 2)) / d_half)
 
-        angle_rads[:,0::2] = torch.sin(angle_rads[:,0::2])
-        angle_rads[:,1::2] = torch.cos(angle_rads[:,1::2])
+        row_angles = rows / denom  # (h, d_half)
+        col_angles = cols / denom  # (w, d_half)
 
-        return angle_rads
+        row_enc = torch.zeros(h_patches, d_half)
+        row_enc[:, 0::2] = torch.sin(row_angles[:, 0::2])
+        row_enc[:, 1::2] = torch.cos(row_angles[:, 1::2])
+
+        col_enc = torch.zeros(w_patches, d_half)
+        col_enc[:, 0::2] = torch.sin(col_angles[:, 0::2])
+        col_enc[:, 1::2] = torch.cos(col_angles[:, 1::2])
+
+        # Broadcast to (h, w, d_half) then combine
+        row_enc_2d = row_enc.unsqueeze(1).expand(-1, w_patches, -1)  # (h, w, d_half)
+        col_enc_2d = col_enc.unsqueeze(0).expand(h_patches, -1, -1)  # (h, w, d_half)
+
+        encoding_2d = torch.cat([row_enc_2d, col_enc_2d], dim=-1)    # (h, w, d_model)
+        encoding_2d = encoding_2d.reshape(h_patches * w_patches, d_model)  # (seq_len, d_model)
+
+        # Prepend zero vector for [CLS] token
+        cls_encoding = torch.zeros(1, d_model)
+        encoding = torch.cat([cls_encoding, encoding_2d], dim=0)     # (seq_len+1, d_model)
+
+        return encoding
 
 class SelfAttentionHead(torch.nn.Module):
     def __init__(self,

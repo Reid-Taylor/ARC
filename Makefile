@@ -81,6 +81,9 @@ local-test-universal-encoder:
 view-training:
 	tensorboard --logdir logs/test
 
+compile:
+	typst compile documentation/documentation.typ
+
 clean:
 	@echo "Cleaning up local artifacts..."
 	rm -rf ./models/test
