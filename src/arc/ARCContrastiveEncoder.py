@@ -5,7 +5,7 @@ import lightning as L
 import torch
 from torch.nn import functional as F
 from jaxtyping import Float
-from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor
+from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor, ChannelSummary
 from src.arc.ARCUtils import anti_sparsity_loss
 from functools import partial
 
@@ -49,6 +49,7 @@ class MultiTaskEncoder(L.LightningModule):
         self.decoder = Decoder(**network_dimensions["Decoder"])
 
         self.task_agnostics: list[str] = []
+        self.channel_summary = ChannelSummary(**network_dimensions["Channel Summary"])
         self.downstream_attributes: list[str] = attribute_requirements
         self.augmentation_representations = torch.nn.ParameterDict()
 
@@ -88,6 +89,7 @@ class MultiTaskEncoder(L.LightningModule):
             "target_encoder": list(self.target_encoder.parameters()),
             "target_projector": list(self.target_projector.parameters()),
             "online_predictor": [p for p in self.online_predictor.parameters() if p.requires_grad],
+            "channel_summary": [p for p in self.channel_summary.parameters() if p.requires_grad],
             "attribute_predictors": {
                 key: [p for p in getattr(self, f"attribute:{key}").parameters() if p.requires_grad]
                 for key in self.downstream_attributes
@@ -96,10 +98,11 @@ class MultiTaskEncoder(L.LightningModule):
         }
         return params
         
-    def _forward_grid(self, grid_1, grid_2):
+    def _forward_grid(self, grid_1, grid_2, channel_features):
         """
         This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results.
         Accepts batched tensors — grid_1 and grid_2 can have arbitrary batch dimension.
+        channel_features: [B, channel_summary_dim] from the ChannelSummary bypass.
         """
         results_dict = {}
 
@@ -113,6 +116,8 @@ class MultiTaskEncoder(L.LightningModule):
         results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
         results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
         results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
+        encoder_embedding = self.online_encoder(grid_1)
+        results_dict['embedding:original'] = torch.cat([encoder_embedding, channel_features], dim=-1)
 
         for attribute in self.downstream_attributes:
             results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
@@ -131,8 +136,11 @@ class MultiTaskEncoder(L.LightningModule):
         encoded_originals = self.preprocessor(stacked['grid:padded_original'])
         encoded_augmentations = self.preprocessor(stacked['grid:padded_augmentation'])
 
-        standard = self._forward_grid(encoded_originals, encoded_augmentations)
-        mirrored = self._forward_grid(encoded_augmentations, encoded_originals)
+        channel_features_orig = self.channel_summary(stacked['grid:padded_original'])
+        channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation'])
+
+        standard = self._forward_grid(encoded_originals, encoded_augmentations, channel_features_orig)
+        mirrored = self._forward_grid(encoded_augmentations, encoded_originals, channel_features_aug)
 
         return {
             'stacked': {'standard': standard, 'mirrored': mirrored},
@@ -152,13 +160,13 @@ class MultiTaskEncoder(L.LightningModule):
         original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
         augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_augmentation']
 
-        detectable_indicators:Float[torch.Tensor, "batch_size 1 1"] = torch.maximum(
+        detectable_indicators:Float[torch.Tensor, "batch_size 1 1 1"] = torch.maximum(
             torch.maximum(
                 batch['presence:roll'], 
                 batch['presence:scale_grid']
                 ),
             batch['presence:isolate_color']
-        ).view(-1,1,1)
+        ).view(-1,1,1,1)
 
         coalesced_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = torch.where(
             detectable_indicators.bool(),
@@ -184,7 +192,7 @@ class MultiTaskEncoder(L.LightningModule):
                 )
             )
 
-        downstream_attribute_loss = torch.stack(downstream_attribute_loss) * 10
+        downstream_attribute_loss = torch.stack(downstream_attribute_loss)
 
         task_sensitive_loss = []
         for key in self.augmentation_representations.keys():
@@ -498,12 +506,13 @@ class MultiTaskEncoder(L.LightningModule):
     def configure_optimizers(self):
         params = self._get_parameters()
 
-        main_optimizer = torch.optim.Adam([
-            {'params': params.get("online_encoder"), 'lr': self.lr},
-            {'params': params.get("decoder"), 'lr': self.lr * 1.8},
-            {'params': params.get("online_projector"), 'lr': self.lr * 1.2},
-            {'params': params.get("online_predictor"), 'lr': self.lr * 1.2},
-            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr * 10}
+        main_optimizer = torch.optim.AdamW([
+            {'params': params.get("online_encoder"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': params.get("decoder"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': params.get("online_projector"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': params.get("online_predictor"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': params.get("channel_summary"), 'lr': self.lr, 'weight_decay': 1e-4},
+            {'params': [parameter for each in params.get("attribute_predictors").values() for parameter in each], 'lr': self.lr, 'weight_decay': 1e-4}
         ])
 
         return main_optimizer

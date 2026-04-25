@@ -3,6 +3,7 @@ from beartype.typing import Optional, Union, Dict
 from json import JSONDecoder
 from dataclasses import dataclass
 import torch
+from torch.nn import functional as F
 import os
 import sys
 from pathlib import Path
@@ -28,8 +29,8 @@ class ARCGrid:
     grid_size: Int[torch.Tensor, "2"]
     num_colors: Float[torch.Tensor, "1"]
     color_map: Float[torch.Tensor, "10"]
-    padded_augmented_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
-    padded_grid: Optional[Int[torch.Tensor, "1 30 30"]] = None
+    padded_augmented_grid: Optional[Float[torch.Tensor, "1 10 30 30"]] = None
+    padded_grid: Optional[Float[torch.Tensor, "1 10 30 30"]] = None
     attributes: Optional[Int[torch.Tensor, "1 _"]] = None
     embedding: Optional[Float[torch.Tensor, "1 D"]] = None
     def __init__(self, name:str, values:Union[list[list[int]], torch.Tensor]) -> None:
@@ -39,20 +40,26 @@ class ARCGrid:
         self.grid: Int[torch.Tensor, "1 H W"] = torch.tensor(values, dtype=torch.int8).add(1).unsqueeze(0)
         self.grid_size: Float[torch.Tensor, "1 2"] = torch.tensor(self.grid.squeeze(dim=0).shape).unsqueeze(0).to(torch.float32)
         self.area: Float[torch.Tensor, "1"] = torch.prod(self.grid_size).unsqueeze(0).to(torch.float32)
-        self.padded_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.grid,
-            pad=(0,30 - len(values[0]),0,30 - len(values)),
-            mode='constant', 
-            value= 0
-            ).to(torch.float32)
+        padded_int = torch.nn.functional.pad(self.grid,
+            pad=(0, 30 - len(values[0]), 0, 30 - len(values)),
+            mode='constant',
+            value=0
+        ).long().squeeze(0)
+        self.padded_grid: Float[torch.Tensor, "1 10 30 30"] = F.one_hot(
+            padded_int, num_classes=11
+        )[..., 1:].permute(2, 0, 1).unsqueeze(0).to(torch.float32)
 
         self.augmented_grid: Int[torch.Tensor, "1 H W"] = self.grid.detach().clone()
         self.augment_grid()
         augmented_shape = self.augmented_grid.shape
-        self.padded_augmented_grid:Float[torch.Tensor, "1 30 30"] = torch.nn.functional.pad(self.augmented_grid,
-            pad=(0,30 - augmented_shape[-1],0,30 - augmented_shape[-2]),
-            mode='constant', 
+        padded_aug_int = torch.nn.functional.pad(self.augmented_grid,
+            pad=(0, 30 - augmented_shape[-1], 0, 30 - augmented_shape[-2]),
+            mode='constant',
             value=0
-            ).to(torch.float32)
+        ).long().squeeze(0)
+        self.padded_augmented_grid: Float[torch.Tensor, "1 10 30 30"] = F.one_hot(
+            padded_aug_int, num_classes=11
+        )[..., 1:].permute(2, 0, 1).unsqueeze(0).to(torch.float32)
 
         unique_colors: Float[torch.Tensor, "_"] = torch.unique(torch.reshape(self.grid, [-1]))
         self.num_colors: Float[torch.Tensor, '1'] = torch.tensor([len(unique_colors)]).to(torch.float32)
@@ -110,12 +117,15 @@ class ARCGrid:
         self.augmented_grid = self.grid.detach().clone()
         self.augment_grid()
         augmented_shape = self.augmented_grid.shape
-        self.padded_augmented_grid = torch.nn.functional.pad(
+        padded_aug_int = torch.nn.functional.pad(
             self.augmented_grid,
             pad=(0, 30 - augmented_shape[-1], 0, 30 - augmented_shape[-2]),
             mode='constant',
             value=0
-        ).to(torch.float32)
+        ).long().squeeze(0)
+        self.padded_augmented_grid = F.one_hot(
+            padded_aug_int, num_classes=11
+        )[..., 1:].permute(2, 0, 1).unsqueeze(0).to(torch.float32)
 
     def augment_grid(self) -> None:
         for aug in self.augmentation_list:
@@ -134,9 +144,9 @@ class ARCGrid:
     
     @beartype
     def _apply_color_map(self) -> None:
-        color_map_tensor = torch.randperm(10, dtype=torch.int8)
+        color_map_tensor = torch.randperm(10, dtype=torch.int8) + 1
 
-        self.augmented_grid = color_map_tensor[self.augmented_grid.add(-1).long()].float()
+        self.augmented_grid = color_map_tensor[self.augmented_grid.add(-1).long()]
     
     @beartype
     def _apply_roll(self) -> None:

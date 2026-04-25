@@ -1,6 +1,7 @@
+# GCP parameters
 GCP_ZONE ?= us-central1-f
-VM_INSTANCE_NAME ?= instance-20260417-003557
-MACHINE_TYPE ?= e2-highmem-128
+VM_INSTANCE_NAME ?= instance-20260422-020511
+MACHINE_TYPE ?= e2-highmem-16
 DISK_SIZE ?= 120GB
 
 # Training parameters
@@ -13,9 +14,11 @@ gcp-create:
 		--project amplified-hull-484821-b5 \
 		--zone=$(GCP_ZONE) \
 		--machine-type $(MACHINE_TYPE) \
-		--boot-disk-size $(DISK_SIZE) \
-		--maintenance-policy TERMINATE \
-		--restart-on-failure \
+		--boot-disk-size $(DISK_SIZE) 
+
+gcp-delete:
+	@echo "Deleting GCP instance..."
+	gcloud compute instances delete $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
 
 gcp-start:
 	gcloud compute instances start $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
@@ -83,11 +86,21 @@ local-test-universal-encoder:
 view-training:
 	tensorboard --logdir logs/test
 
+compile:
+	@echo "Building Typst document..."
+	typst compile documentation/documentation.typ
+
 clean:
 	@echo "Cleaning up local artifacts..."
 	rm -rf ./models/test
 	rm -rf ./logs/test
 	rm -rf lightning_logs/
+
+clean-tmp:
+	@echo "Cleaning up temporary artifacts..."
+	rm -rf ./models/test/tmp
+	rm -rf ./logs/test/tmp
+	rm -rf lightning_logs/tmp
 
 help:
 	@echo "Available targets:"
@@ -96,10 +109,12 @@ help:
 	@echo "  local-test-transformer       - Test the train-transformer pipeline locally"
 	@echo "  local-test-encoder       - Test the train-encoder pipeline locally"
 	@echo "  gcp-create       - Create a new GCP instance, per specifications"
+	@echo "  gcp-delete       - Delete a GCP instance"
 	@echo "  gcp-start       - Spin up an existing GCP instance"
 	@echo "  gcp-ssh       - SSH into an active GCP instance"
 	@echo "  gcp-stop       - Spin down an active GCP instance"
 	@echo "  clean       - Clean up local artifacts"
+	@echo "  clean-tmp       - Clean up temporary artifacts"
 	@echo ""
 	@echo "Configuration variables (can be overridden):"
 	@echo "  GCP_ZONE=$(GCP_ZONE)"
@@ -110,4 +125,4 @@ help:
 	@echo "  MODEL=$(MODEL)"
 	@echo ""
 
-.PHONY: view-training train-encoder local-test-transformer local-test-encoder gcp-create gcp-start gcp-ssh gcp-stop clea n
+.PHONY: view-training train-encoder local-test-transformer local-test-encoder gcp-create gcp-delete gcp-start gcp-ssh gcp-stop clean

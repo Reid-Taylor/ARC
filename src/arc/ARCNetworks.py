@@ -9,65 +9,98 @@ from functools import partial
 class PreProcessor(torch.nn.Module):
     """
     A data preprocessor with mechanics inspired by the ViT paper, 2021.
+    Accepts one-hot encoded grids of shape [batch_size, num_colors, 30, 30].
     """
     @beartype
-    def __init__(self, patch_len:int, dim_model:int):
+    def __init__(self, patch_len:int, dim_model:int, num_colors:int=10):
         super().__init__()
         self.p:int = patch_len
         self.dim_model:int = dim_model
-        self.sequence_length:int = int(30 * 30 // self.p ** 2 + 1)
+        self.num_colors:int = num_colors
+        self.grid_size:int = 30
+        self.h_patches:int = self.grid_size // self.p
+        self.w_patches:int = self.grid_size // self.p
+        self.sequence_length:int = self.h_patches * self.w_patches + 1
+        self.patch_dim:int = self.num_colors * self.p ** 2
 
         self.embedding_layer = torch.nn.Linear(
-            self.p**2,
+            self.patch_dim,
             self.dim_model,
             bias=False
         )
 
-        self.register_buffer('positional_encoding', self.pos_encoding(
-            position=self.sequence_length, 
+        self.register_buffer('positional_encoding', self.pos_encoding_2d(
+            h_patches=self.h_patches,
+            w_patches=self.w_patches,
             d_model=self.dim_model
         ))
     
     @beartype
-    def forward(self, padded_grid:Float[torch.Tensor, "batch_size 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size num_colors 30 30"]) -> Float[torch.Tensor, "batch_size seq_len dim_model"]:
         """
-        The processor expects the data presented as a 30x30 grid of float-cast discrete integer values.
-
-        This will return the linear embeddings of the patches prepended by a [CLS] token, and then summed against 1D sinusoidal positional encodings. 
+        Accepts a one-hot encoded grid [batch_size, num_colors, 30, 30].
+        Extracts patches of shape [p, p] per channel, flattens to [num_colors * p * p],
+        prepends a [CLS] token, and applies linear embedding + positional encoding.
         """
-        batch_size, height, width = padded_grid.shape
+        batch_size, C, height, width = padded_grid.shape
         seq_len = height * width // self.p**2
         assert seq_len + 1 == self.sequence_length, f"Incorrect data shapes, PreProcessor Sequence Length {self.sequence_length} and {seq_len + 1}"
 
-        patches:Float[torch.Tensor, "batch_size initial_sequence dim_model"] = padded_grid.reshape((batch_size, seq_len, self.p**2))
-        class_tokens = torch.zeros(batch_size, 1, self.p**2, device=padded_grid.device)
+        # Reshape: [B, C, 30, 30] -> [B, C, H_patches, p, W_patches, p]
+        x = padded_grid.reshape(batch_size, C, height // self.p, self.p, width // self.p, self.p)
+        # -> [B, H_patches, W_patches, C, p, p]
+        x = x.permute(0, 2, 4, 1, 3, 5)
+        # -> [B, seq_len, C * p * p]
+        patches = x.reshape(batch_size, seq_len, self.patch_dim)
 
+        class_tokens = torch.zeros(batch_size, 1, self.patch_dim, device=padded_grid.device)
         patches = torch.cat((class_tokens, patches), dim=1)
 
-        result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) + self.positional_encoding
+        result:Float[torch.Tensor, "batch_size seq_len dim_model"] = self.embedding_layer(patches) #+ self.positional_encoding
 
         return result
 
     @beartype
     @staticmethod
-    def pos_encoding(position:int, d_model:int) -> Float[torch.Tensor, "seq_len dim_model"]:
+    def pos_encoding_2d(h_patches:int, w_patches:int, d_model:int) -> Float[torch.Tensor, "seq_len dim_model"]:
         """
-        This function accepts two parameters:
-            - position: Sequence Length
-            - d_model: The dimension of the embedding vector
+        Compute 2D sinusoidal positional encoding for a grid of patches.
+        Uses the first d_model//2 dimensions for row position and the
+        remaining dimensions for column position. A zero vector is
+        prepended for the [CLS] token.
         """
-        if position == 0 or d_model <= 0:
-            return -1
+        assert d_model % 2 == 0, "d_model must be even for 2D positional encoding"
+        d_half = d_model // 2
 
-        pos = torch.arange(position, dtype=torch.float32).reshape(position,1)
-        ind = torch.arange(d_model, dtype=torch.float32).reshape(1,d_model)
+        rows = torch.arange(h_patches, dtype=torch.float32).unsqueeze(1)
+        cols = torch.arange(w_patches, dtype=torch.float32).unsqueeze(1)
+        dim_idx = torch.arange(d_half, dtype=torch.float32).unsqueeze(0)
 
-        angle_rads = pos / torch.pow(10000, (2 * (ind//2)) / d_model)
+        denom = torch.pow(10000.0, (2.0 * (dim_idx // 2)) / d_half)
 
-        angle_rads[:,0::2] = torch.sin(angle_rads[:,0::2])
-        angle_rads[:,1::2] = torch.cos(angle_rads[:,1::2])
+        row_angles = rows / denom  # (h, d_half)
+        col_angles = cols / denom  # (w, d_half)
 
-        return angle_rads
+        row_enc = torch.zeros(h_patches, d_half)
+        row_enc[:, 0::2] = torch.sin(row_angles[:, 0::2])
+        row_enc[:, 1::2] = torch.cos(row_angles[:, 1::2])
+
+        col_enc = torch.zeros(w_patches, d_half)
+        col_enc[:, 0::2] = torch.sin(col_angles[:, 0::2])
+        col_enc[:, 1::2] = torch.cos(col_angles[:, 1::2])
+
+        # Broadcast to (h, w, d_half) then combine
+        row_enc_2d = row_enc.unsqueeze(1).expand(-1, w_patches, -1)  # (h, w, d_half)
+        col_enc_2d = col_enc.unsqueeze(0).expand(h_patches, -1, -1)  # (h, w, d_half)
+
+        encoding_2d = torch.cat([row_enc_2d, col_enc_2d], dim=-1)    # (h, w, d_model)
+        encoding_2d = encoding_2d.reshape(h_patches * w_patches, d_model)  # (seq_len, d_model)
+
+        # Prepend zero vector for [CLS] token
+        cls_encoding = torch.zeros(1, d_model)
+        encoding = torch.cat([cls_encoding, encoding_2d], dim=0)     # (seq_len+1, d_model)
+
+        return encoding
 
 class SelfAttentionHead(torch.nn.Module):
     def __init__(self,
@@ -121,7 +154,7 @@ class SelfAttentionHead(torch.nn.Module):
 
         attention_output = torch.einsum("bqd,bdk->bqk",query, key.reshape(batch_size, dim_model, seq_len))
         attention_output /= dim_model**0.5
-        # attention_output = F.softmax(attention_output, dim=-1)
+        attention_output = F.softmax(attention_output, dim=-1)
 
         return torch.einsum("bqk,bkd->bqd",attention_output, value)
 
@@ -188,7 +221,7 @@ class MLP(torch.nn.Module):
         return output
 
 class Encoder(torch.nn.Module):
-    def __init__(self, n_heads, num_layers, dim_model):
+    def __init__(self, n_heads, num_layers, dim_model, dropout=0.1):
         super().__init__()
         self.n_heads = n_heads
         self.num_layers = num_layers
@@ -197,6 +230,8 @@ class Encoder(torch.nn.Module):
         self.mlp = torch.nn.ModuleList([MLP(dim_model=self.dim_model, use_bias=True) for _ in range(self.num_layers)])
         self.layer_norm = torch.nn.LayerNorm(self.dim_model)
         self.msa = torch.nn.ModuleList([MSA(self.n_heads, self.dim_model) for _ in range(self.num_layers)])
+        self.attn_dropout = torch.nn.ModuleList([torch.nn.Dropout(p=dropout) for _ in range(self.num_layers)])
+        self.mlp_dropout = torch.nn.ModuleList([torch.nn.Dropout(p=dropout) for _ in range(self.num_layers)])
 
     def forward(self, processed_grid_repr):
         """
@@ -207,12 +242,33 @@ class Encoder(torch.nn.Module):
         output:Float[torch.Tensor, "batch_size N D"] = processed_grid_repr
 
         for idx in range(self.num_layers):
-            attended = self.msa[idx](self.layer_norm(output)) + output
-            output = self.mlp[idx](self.layer_norm(attended)) + attended
+            attended = self.attn_dropout[idx](self.msa[idx](self.layer_norm(output))) + output
+            output = self.mlp_dropout[idx](self.mlp[idx](self.layer_norm(attended))) + attended
 
         output:Float[torch.Tensor, "batch_size 1 D"] = self.layer_norm(output[:,0,:])
 
         return output
+
+@beartype
+class ChannelSummary(torch.nn.Module):
+    """
+    Lightweight bypass that extracts per-channel global features directly from
+    the one-hot grid [B, 10, 30, 30], preserving the channel structure that
+    ViT patching destroys. Produces a compact summary for channel-level tasks
+    such as counting distinct colors.
+    """
+    def __init__(self, num_colors:int=10, output_dim:int=16):
+        super().__init__()
+        self.max_pool = torch.nn.AdaptiveMaxPool2d(1)
+        self.avg_pool = torch.nn.AdaptiveAvgPool2d(1)
+        self.fc = torch.nn.Linear(num_colors * 2, output_dim)
+
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size num_colors 30 30"]) -> Float[torch.Tensor, "batch_size output_dim"]:
+        max_features = self.max_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        avg_features = self.avg_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        combined = torch.cat([max_features, avg_features], dim=-1)         # [B, 20]
+        return F.gelu(self.fc(combined))                                   # [B, output_dim]
+
 
 @beartype
 class FullyConnectedLayer(torch.nn.Module):
@@ -246,7 +302,7 @@ class AttributeHead(torch.nn.Module):
     """
     A network which predicts specific attributes from the latent representation.
     """
-    def __init__(self, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11]):
+    def __init__(self, input_size:int=64, n_heads:int=4, output_sizes:list[int]=[10,11], dropout:float=0.3):
         super().__init__()
 
         output_dim, output_channels = output_sizes
@@ -255,17 +311,18 @@ class AttributeHead(torch.nn.Module):
 
         self.channels = output_channels # Accessed in the ARCEncoder training step
 
-        self.fc_out = FullyConnectedLayer(
-            input_size=input_size,
-            output_size=output_dim*self.channels,
-            activation="identity"
+        self.mlp = MLP(
+            num_layers=2,
+            dim_model=input_size,
+            activation_function=F.gelu,
+            use_bias=True
         )
+        self.dropout = torch.nn.Dropout(p=dropout)
+        self.fc_out = torch.nn.Linear(input_size, output_dim * self.channels)
 
     def forward(self, x:torch.Tensor) -> Float[torch.Tensor, "batch_size _"]:
 
-        final_layer = self.fc_out(x)
-
-        return final_layer
+        return self.fc_out(self.dropout(self.mlp(x)))
 
 class UniversalTransformerEncoder(torch.nn.Module):
     """
@@ -426,7 +483,7 @@ class Decoder(torch.nn.Module):
         super().__init__()
 
         self.mlp = MLP(num_layers=4, dim_model=input_size, use_bias=True)
-        self.fc = FullyConnectedLayer(input_size, output_size*11, activation="identity")
+        self.fc = torch.nn.Linear(input_size, output_size * 11)
 
     def forward(self, x:Float[torch.Tensor, "batch_size dim_model"]) -> Float[torch.Tensor, "batch_size 900 11"]:
 
