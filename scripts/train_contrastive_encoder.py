@@ -202,9 +202,13 @@ def setup_trainer(
     epochs: int, 
     model_save_path: str, 
     log_path: str, 
-    use_gpu: bool = True
+    use_gpu: bool = True,
+    experiment_name: str | None = None
 ) -> L.Trainer:
     """Setup Lightning trainer with callbacks and logger."""
+    
+    version = experiment_name if experiment_name else f"train_{torch.randint(0, 10000, (1,)).item()}"
+    model_save_path = os.path.join(model_save_path, version)
     
     os.makedirs(model_save_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)
@@ -227,7 +231,7 @@ def setup_trainer(
     logger = TensorBoardLogger(
         save_dir=log_path,
         name="arc_encoder",
-        version=f"train_{torch.randint(0, 10000, (1,)).item()}"
+        version=version
     )
     
     accelerator = "gpu" if use_gpu and torch.cuda.is_available() else "cpu"
@@ -257,6 +261,10 @@ def main():
     parser.add_argument("--log-path", type=str, default="./lightning_logs", help="Logging path")
     parser.add_argument("--no-gpu", action="store_true", help="Disable GPU usage")
     parser.add_argument("--output-metrics", type=str, help="Path to save training metrics JSON")
+    parser.add_argument("--experiment-name", type=str, default=None,
+                        help="Name for this experiment run (e.g. 'dim_size_128'). "
+                             "Used as the TensorBoard version and checkpoint subdirectory. "
+                             "If not provided, a random integer is used.")
     parser.add_argument("--resume", type=str, default=None,
                         help="Path to a checkpoint to resume training from (e.g. models/test/last.ckpt). "
                              "If not provided, a new model is created from scratch.")
@@ -295,7 +303,8 @@ def main():
         config['training']['encoder']['epochs'],
         args.model_save_path, 
         args.log_path, 
-        use_gpu=not args.no_gpu
+        use_gpu=not args.no_gpu,
+        experiment_name=args.experiment_name
     )
     
     print("Starting training...")

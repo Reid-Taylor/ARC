@@ -1,12 +1,13 @@
 # GCP parameters
 GCP_ZONE ?= us-central1-f
-VM_INSTANCE_NAME ?= instance-20260422-020511
+VM_INSTANCE_NAME ?= instance-101
 MACHINE_TYPE ?= e2-highmem-16
 DISK_SIZE ?= 120GB
 
 # Training parameters
 DATASET_PATH ?= training
 MODEL ?= encoder
+EXPERIMENT_NAME ?=
 
 gcp-create:
 	@echo "Creating GCP instance..."
@@ -32,56 +33,27 @@ gcp-ssh:
 gcp-copy-logs:
 	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test ./logs
 
-gcp-copy-models:
+gcp-copy:
 	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/models/test ./models/test
+	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test ./logs
 
 train-encoder:
-	@echo "Running full pipeline of ARC Encoder training..."
-	uv run scripts/train_encoder.py \
-		--config train_config \
-		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/encoder \
-		--log-path ./logs/test/encoder
-
-train-contrastive-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	uv run scripts/train_contrastive_encoder.py \
 		--config train_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/contrastive_encoder \
-		--log-path ./logs/test/contrastive_encoder
-
-train-universal-encoder:
-	@echo "Running local test of ARC Encoder training..."
-	uv run scripts/train_universal_encoder.py \
-		--config train_config \
-		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/universal_encoder \
-		--log-path ./logs/test/universal_encoder
+		--log-path ./logs/test/contrastive_encoder \
+		$(if $(EXPERIMENT_NAME),--experiment-name $(EXPERIMENT_NAME),)
 
 local-test-encoder:
-	@echo "Running local test of ARC Encoder training..."
-	uv run scripts/train_encoder.py \
-		--config test_config \
-		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/tmp/encoder \
-		--log-path ./logs/test/tmp/encoder
-
-local-test-contrastive-encoder:
 	@echo "Running local test of ARC Encoder training..."
 	uv run scripts/train_contrastive_encoder.py \
 		--config test_config \
 		--dataset-path $(DATASET_PATH) \
 		--model-save-path ./models/test/tmp/contrastive_encoder \
-		--log-path ./logs/test/tmp/contrastive_encoder
-
-local-test-universal-encoder:
-	@echo "Running local test of ARC Encoder training..."
-	uv run scripts/train_universal_encoder.py \
-		--config test_config \
-		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/tmp/universal_encoder \
-		--log-path ./logs/test/tmp/universal_encoder
+		--log-path ./logs/test/tmp/contrastive_encoder \
+		$(if $(EXPERIMENT_NAME),--experiment-name $(EXPERIMENT_NAME),)
 
 view-training:
 	tensorboard --logdir logs/test
@@ -106,7 +78,6 @@ help:
 	@echo "Available targets:"
 	@echo "  view-training       - View training logs via TensorBoard"
 	@echo "  train-encoder       - Train the encoder"
-	@echo "  local-test-transformer       - Test the train-transformer pipeline locally"
 	@echo "  local-test-encoder       - Test the train-encoder pipeline locally"
 	@echo "  gcp-create       - Create a new GCP instance, per specifications"
 	@echo "  gcp-delete       - Delete a GCP instance"
