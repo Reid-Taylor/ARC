@@ -109,18 +109,18 @@ class MultiTaskEncoder(L.LightningModule):
         results_dict['grid:encoded_original'] = grid_1
         results_dict['grid:encoded_augmentation'] = grid_2
 
-        results_dict['embedding:original'] = self.online_encoder(grid_1)
+        encoder_embedding = self.online_encoder(grid_1)
+        results_dict['embedding:original'] = encoder_embedding
         results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
-        results_dict['decoding:padded_original'] = self.decoder(results_dict['embedding:original'])
+        results_dict['decoding:padded_original'] = self.decoder(encoder_embedding)
 
-        results_dict['embedding:contrastive_space:online'] = self.online_projector(results_dict['embedding:original'])
+        results_dict['embedding:contrastive_space:online'] = self.online_projector(encoder_embedding)
         results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
         results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
-        encoder_embedding = self.online_encoder(grid_1)
-        results_dict['embedding:original'] = torch.cat([encoder_embedding, channel_features], dim=-1)
 
+        combined_embedding = torch.cat([encoder_embedding, channel_features], dim=-1)
         for attribute in self.downstream_attributes:
-            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(results_dict['embedding:original'])
+            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(combined_embedding)
 
         return results_dict
 
@@ -157,18 +157,24 @@ class MultiTaskEncoder(L.LightningModule):
         pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
         pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
-        original_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_original']
-        augmented_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = batch['grid:padded_augmentation']
+        # Convert one-hot [B, 10, 30, 30] back to integer class indices [B, 30, 30]
+        # Channels 1-10 are stored in dim=1; prepend background (0) channel and argmax
+        original_onehot = batch['grid:padded_original']
+        augmented_onehot = batch['grid:padded_augmentation']
+        bg_orig = 1.0 - original_onehot.sum(dim=1, keepdim=True)
+        original_input = torch.cat([bg_orig, original_onehot], dim=1).argmax(dim=1)
+        bg_aug = 1.0 - augmented_onehot.sum(dim=1, keepdim=True)
+        augmented_input = torch.cat([bg_aug, augmented_onehot], dim=1).argmax(dim=1)
 
-        detectable_indicators:Float[torch.Tensor, "batch_size 1 1 1"] = torch.maximum(
+        detectable_indicators = torch.maximum(
             torch.maximum(
                 batch['presence:roll'], 
                 batch['presence:scale_grid']
                 ),
             batch['presence:isolate_color']
-        ).view(-1,1,1,1)
+        ).view(-1,1,1)
 
-        coalesced_input:Float[torch.Tensor, "batch_size x_axis y_axis"] = torch.where(
+        coalesced_input = torch.where(
             detectable_indicators.bool(),
             augmented_input,
             original_input
@@ -260,7 +266,9 @@ class MultiTaskEncoder(L.LightningModule):
         predicted_embs:Float[torch.Tensor, "batch_size dim_model"] = challenge_embs + mean_delta.squeeze(1)
 
         predicted_grids = self.decoder(predicted_embs)
-        solution_grids = all_grids[solution_idx]
+        solution_onehot = all_grids[solution_idx]
+        bg_sol = 1.0 - solution_onehot.sum(dim=1, keepdim=True)
+        solution_grids = torch.cat([bg_sol, solution_onehot], dim=1).argmax(dim=1)
         prediction_loss = F.cross_entropy(predicted_grids.view(-1, 11), solution_grids.long().view(-1))
 
         return comparative_loss, prediction_loss
