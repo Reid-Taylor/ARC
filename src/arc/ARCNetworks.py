@@ -269,7 +269,6 @@ class ChannelSummary(torch.nn.Module):
         combined = torch.cat([max_features, avg_features], dim=-1)         # [B, 20]
         return F.gelu(self.fc(combined))                                   # [B, output_dim]
 
-
 @beartype
 class FullyConnectedLayer(torch.nn.Module):
     """
@@ -472,7 +471,6 @@ class UniversalTransformerEncoder(torch.nn.Module):
                 break
 
         return accumulated_state
-
 
 @beartype
 class Decoder(torch.nn.Module):

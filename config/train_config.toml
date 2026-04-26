@@ -1,7 +1,6 @@
 [model]
 [model.shared]
 latent_size = 96
-channel_summary_dim = 16
 patch_len = 3
 transformation_dimension_size = 256
 [model.encoder]

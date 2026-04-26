@@ -183,11 +183,11 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             },
             "Channel Summary": {
                 "num_colors": 10,
-                "output_dim": shared_model_config.get('channel_summary_dim', 16)
+                "output_dim": shared_model_config['latent_size']
             },
             "Attribute Predictor": {
                 key: {
-                    "input_size": shared_model_config['latent_size'] + shared_model_config.get('channel_summary_dim', 16),
+                    "input_size": shared_model_config['latent_size'],
                     "n_heads": downstream_attributes_config[key]['n_heads'],
                     "output_sizes": downstream_attributes_config[key]['output_sizes']
                 } for key in downstream_attributes_config.keys()

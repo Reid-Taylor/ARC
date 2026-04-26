@@ -98,11 +98,10 @@ class MultiTaskEncoder(L.LightningModule):
         }
         return params
         
-    def _forward_grid(self, grid_1, grid_2, channel_features):
+    def _forward_grid(self, grid_1, grid_2):
         """
         This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results.
         Accepts batched tensors — grid_1 and grid_2 can have arbitrary batch dimension.
-        channel_features: [B, channel_summary_dim] from the ChannelSummary bypass.
         """
         results_dict = {}
 
@@ -118,9 +117,8 @@ class MultiTaskEncoder(L.LightningModule):
         results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
         results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
 
-        combined_embedding = torch.cat([encoder_embedding, channel_features], dim=-1)
         for attribute in self.downstream_attributes:
-            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(combined_embedding)
+            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(encoder_embedding)
 
         return results_dict
 
@@ -136,11 +134,14 @@ class MultiTaskEncoder(L.LightningModule):
         encoded_originals = self.preprocessor(stacked['grid:padded_original'])
         encoded_augmentations = self.preprocessor(stacked['grid:padded_augmentation'])
 
-        channel_features_orig = self.channel_summary(stacked['grid:padded_original'])
-        channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation'])
+        channel_features_orig = self.channel_summary(stacked['grid:padded_original']).unsqueeze(1)
+        channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
 
-        standard = self._forward_grid(encoded_originals, encoded_augmentations, channel_features_orig)
-        mirrored = self._forward_grid(encoded_augmentations, encoded_originals, channel_features_aug)
+        encoded_originals = torch.cat([encoded_originals, channel_features_orig], dim=1)
+        encoded_augmentations = torch.cat([encoded_augmentations, channel_features_aug], dim=1)
+
+        standard = self._forward_grid(encoded_originals, encoded_augmentations)
+        mirrored = self._forward_grid(encoded_augmentations, encoded_originals)
 
         return {
             'stacked': {'standard': standard, 'mirrored': mirrored},
