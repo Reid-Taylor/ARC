@@ -181,6 +181,14 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                 "output_size": shared_model_config['latent_size'],
                 "activation": "identity"
             },
+            "Row Summary": {
+                "num_rows": 30,
+                "output_dim": shared_model_config['latent_size']
+            },
+            "Column Summary": {
+                "num_columns": 30,
+                "output_dim": shared_model_config['latent_size']
+            },
             "Channel Summary": {
                 "num_colors": 10,
                 "output_dim": shared_model_config['latent_size']

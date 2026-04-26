@@ -250,6 +250,49 @@ class Encoder(torch.nn.Module):
         return output
 
 @beartype
+class RowSummary(torch.nn.Module):
+    """
+    Lightweight bypass that extracts per-channel global features directly from
+    the one-hot grid [B, 10, 30, 30], preserving the channel structure that
+    ViT patching destroys. Produces a compact summary for channel-level tasks
+    such as counting distinct colors.
+    """
+    def __init__(self, num_rows:int=30, output_dim:int=16):
+        super().__init__()
+        self.max_pool = torch.nn.AdaptiveMaxPool2d(1)
+        self.avg_pool = torch.nn.AdaptiveAvgPool2d(1)
+        self.fc = torch.nn.Linear(num_rows * 2, output_dim)
+
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size num_colors 30 30"]) -> Float[torch.Tensor, "batch_size output_dim"]:
+        padded_grid = padded_grid.permute(0, 2, 1, 3)
+        max_features = self.max_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        avg_features = self.avg_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        combined = torch.cat([max_features, avg_features], dim=-1)         # [B, 20]
+        return F.gelu(self.fc(combined))                                   # [B, output_dim]
+
+@beartype
+class ColumnSummary(torch.nn.Module):
+    """
+    Lightweight bypass that extracts per-channel global features directly from
+    the one-hot grid [B, 10, 30, 30], preserving the channel structure that
+    ViT patching destroys. Produces a compact summary for channel-level tasks
+    such as counting distinct colors.
+    """
+    def __init__(self, num_columns:int=30, output_dim:int=16):
+        super().__init__()
+        self.max_pool = torch.nn.AdaptiveMaxPool2d(1)
+        self.avg_pool = torch.nn.AdaptiveAvgPool2d(1)
+        self.fc = torch.nn.Linear(num_columns * 2, output_dim)
+
+    def forward(self, padded_grid:Float[torch.Tensor, "batch_size num_colors 30 30"]) -> Float[torch.Tensor, "batch_size output_dim"]:
+        padded_grid = padded_grid.permute(0, 3, 2, 1)
+        max_features = self.max_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        avg_features = self.avg_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
+        combined = torch.cat([max_features, avg_features], dim=-1)         # [B, 20]
+        return F.gelu(self.fc(combined))                                   # [B, output_dim]
+
+
+@beartype
 class ChannelSummary(torch.nn.Module):
     """
     Lightweight bypass that extracts per-channel global features directly from

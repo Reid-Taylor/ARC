@@ -5,7 +5,7 @@ import lightning as L
 import torch
 from torch.nn import functional as F
 from jaxtyping import Float
-from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor, ChannelSummary
+from src.arc.ARCNetworks import Encoder, FullyConnectedLayer, Decoder, AttributeHead, PreProcessor, ChannelSummary, RowSummary, ColumnSummary
 from src.arc.ARCUtils import anti_sparsity_loss
 from functools import partial
 
@@ -49,6 +49,8 @@ class MultiTaskEncoder(L.LightningModule):
         self.decoder = Decoder(**network_dimensions["Decoder"])
 
         self.task_agnostics: list[str] = []
+        self.row_summary = RowSummary(**network_dimensions["Row Summary"])
+        self.column_summary = ColumnSummary(**network_dimensions["Column Summary"])
         self.channel_summary = ChannelSummary(**network_dimensions["Channel Summary"])
         self.downstream_attributes: list[str] = attribute_requirements
         self.augmentation_representations = torch.nn.ParameterDict()
