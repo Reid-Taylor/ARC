@@ -1,7 +1,7 @@
 # GCP parameters
 GCP_ZONE ?= us-central1-f
 VM_INSTANCE_NAME ?= instance-101
-MACHINE_TYPE ?= e2-highmem-16
+MACHINE_TYPE ?= e2-highmem-8
 DISK_SIZE ?= 120GB
 
 # Training parameters
@@ -31,11 +31,11 @@ gcp-ssh:
 	gcloud compute ssh $(VM_INSTANCE_NAME) --zone=$(GCP_ZONE)
 
 gcp-copy-logs:
-	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test ./logs
+	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs ./logs
 
 gcp-copy:
-	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/models/test ./models/test
-	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test ./logs
+	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/models ./models
+	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs ./logs
 
 train-encoder:
 	@echo "Training the ARC Encoder..."
@@ -56,7 +56,7 @@ local-test-encoder:
 		$(if $(EXPERIMENT_NAME),--experiment-name $(EXPERIMENT_NAME),)
 
 view-training:
-	tensorboard --logdir logs/test
+	tensorboard --logdir logs/
 
 compile:
 	@echo "Building Typst document..."
