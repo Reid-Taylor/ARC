@@ -30,7 +30,7 @@ sys.path.insert(0, str(project_root))
 
 from src.arc.config_loader import load_config
 from src.arc.ARCDataClasses import ARCProblemSet
-from src.arc.ARCContrastiveEncoder import MultiTaskEncoder
+from arc.ARCEncoder import MultiTaskEncoder
 
 
 def create_dataloader(config: Dict[str, Any]):

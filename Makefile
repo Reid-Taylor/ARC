@@ -38,21 +38,21 @@ gcp-copy:
 	gcloud compute scp --zone=$(GCP_ZONE) --recurse $(VM_INSTANCE_NAME):/home/reidtaylor/ARC/logs/test ./logs
 
 train-encoder:
-	@echo "Running local test of ARC Encoder training..."
-	uv run scripts/train_contrastive_encoder.py \
+	@echo "Training the ARC Encoder..."
+	uv run scripts/train_encoder.py \
 		--config train_config \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/contrastive_encoder \
-		--log-path ./logs/test/contrastive_encoder \
+		--model-save-path ./models/encoder \
+		--log-path ./logs/encoder \
 		$(if $(EXPERIMENT_NAME),--experiment-name $(EXPERIMENT_NAME),)
 
 local-test-encoder:
-	@echo "Running local test of ARC Encoder training..."
-	uv run scripts/train_contrastive_encoder.py \
+	@echo "Running local test of ARC Encoder training script..."
+	uv run scripts/train_encoder.py \
 		--config test_config \
 		--dataset-path $(DATASET_PATH) \
-		--model-save-path ./models/test/tmp/contrastive_encoder \
-		--log-path ./logs/test/tmp/contrastive_encoder \
+		--model-save-path ./models/tmp \
+		--log-path ./logs/tmp \
 		$(if $(EXPERIMENT_NAME),--experiment-name $(EXPERIMENT_NAME),)
 
 view-training:
@@ -64,28 +64,31 @@ compile:
 
 clean:
 	@echo "Cleaning up local artifacts..."
-	rm -rf ./models/test
-	rm -rf ./logs/test
+	rm -rf ./models
+	rm -rf ./logs
 	rm -rf lightning_logs/
 
 clean-tmp:
 	@echo "Cleaning up temporary artifacts..."
-	rm -rf ./models/test/tmp
-	rm -rf ./logs/test/tmp
+	rm -rf ./models/tmp
+	rm -rf ./logs/tmp
 	rm -rf lightning_logs/tmp
 
 help:
 	@echo "Available targets:"
+	@echo "  train-encoder       - Train the encoder with train_config"
+	@echo "  local-test-encoder  - Test the encoder pipeline locally with test_config"
 	@echo "  view-training       - View training logs via TensorBoard"
-	@echo "  train-encoder       - Train the encoder"
-	@echo "  local-test-encoder       - Test the train-encoder pipeline locally"
-	@echo "  gcp-create       - Create a new GCP instance, per specifications"
-	@echo "  gcp-delete       - Delete a GCP instance"
-	@echo "  gcp-start       - Spin up an existing GCP instance"
-	@echo "  gcp-ssh       - SSH into an active GCP instance"
-	@echo "  gcp-stop       - Spin down an active GCP instance"
-	@echo "  clean       - Clean up local artifacts"
-	@echo "  clean-tmp       - Clean up temporary artifacts"
+	@echo "  compile             - (Re)Build Typst documentation"
+	@echo "  clean               - Clean up artifacts (models, logs)"
+	@echo "  clean-tmp           - Clean up temporary artifacts only"
+	@echo "  gcp-create          - Create a new GCP instance"
+	@echo "  gcp-delete          - Delete a GCP instance"
+	@echo "  gcp-start           - Start an existing GCP instance"
+	@echo "  gcp-stop            - Stop an active GCP instance"
+	@echo "  gcp-ssh             - SSH into an active GCP instance"
+	@echo "  gcp-copy            - Copy models and logs from GCP instance"
+	@echo "  gcp-copy-logs       - Copy only logs from GCP instance"
 	@echo ""
 	@echo "Configuration variables (can be overridden):"
 	@echo "  GCP_ZONE=$(GCP_ZONE)"
@@ -93,7 +96,7 @@ help:
 	@echo "  MACHINE_TYPE=$(MACHINE_TYPE)"
 	@echo "  DISK_SIZE=$(DISK_SIZE)"
 	@echo "  DATASET_PATH=$(DATASET_PATH)"
-	@echo "  MODEL=$(MODEL)"
+	@echo "  EXPERIMENT_NAME=$(EXPERIMENT_NAME)"
 	@echo ""
 
-.PHONY: view-training train-encoder local-test-transformer local-test-encoder gcp-create gcp-delete gcp-start gcp-ssh gcp-stop clean
+.PHONY: train-encoder local-test-encoder view-training compile clean clean-tmp gcp-create gcp-delete gcp-start gcp-stop gcp-ssh gcp-copy gcp-copy-logs help
