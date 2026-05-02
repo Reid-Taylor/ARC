@@ -189,7 +189,6 @@ class MSA(torch.nn.Module):
 
         return output
 
-@beartype
 class MLP(torch.nn.Module):
     def __init__(self, 
             num_layers:int = 2,
@@ -213,7 +212,7 @@ class MLP(torch.nn.Module):
             ) for _ in range(self.num_layers)
         ])
 
-    def forward(self,input:Float[torch.Tensor, "batch_size input_dim"]) -> Float[torch.Tensor, "batch_size output_dim"]:
+    def forward(self,input):
         output=input
         for i in range(self.num_layers):
             output = self.layers[i](output)
@@ -221,7 +220,6 @@ class MLP(torch.nn.Module):
         
         return output
 
-@beartype
 class Encoder(torch.nn.Module):
     def __init__(self, n_heads, num_layers, dim_model, dropout=0.1):
         super().__init__()
@@ -292,6 +290,7 @@ class ColumnSummary(torch.nn.Module):
         avg_features = self.avg_pool(padded_grid).squeeze(-1).squeeze(-1)  # [B, 10]
         combined = torch.cat([max_features, avg_features], dim=-1)         # [B, 20]
         return F.gelu(self.fc(combined))                                   # [B, output_dim]
+
 
 @beartype
 class ChannelSummary(torch.nn.Module):
@@ -367,7 +366,6 @@ class AttributeHead(torch.nn.Module):
 
         return self.fc_out(self.dropout(self.mlp(x)))
 
-@beartype
 class UniversalTransformerEncoder(torch.nn.Module):
     """
     The Universal Transformer encoder as defined by Dehghani et al. (2019), arXiv:1807.03819v3.
