@@ -139,8 +139,14 @@ class MultiTaskEncoder(L.LightningModule):
         channel_features_orig = self.channel_summary(stacked['grid:padded_original']).unsqueeze(1)
         channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
 
-        encoded_originals = torch.cat([encoded_originals, channel_features_orig], dim=1)
-        encoded_augmentations = torch.cat([encoded_augmentations, channel_features_aug], dim=1)
+        row_features_orig = self.row_summary(stacked['grid:padded_original']).unsqueeze(1)
+        row_features_aug = self.row_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
+
+        col_features_orig = self.column_summary(stacked['grid:padded_original']).unsqueeze(1)
+        col_features_aug = self.column_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
+
+        encoded_originals = torch.cat([encoded_originals, channel_features_orig, row_features_orig, col_features_orig], dim=1)
+        encoded_augmentations = torch.cat([encoded_augmentations, channel_features_aug, row_features_aug, col_features_aug], dim=1)
 
         standard = self._forward_grid(encoded_originals, encoded_augmentations)
         mirrored = self._forward_grid(encoded_augmentations, encoded_originals)
@@ -160,8 +166,6 @@ class MultiTaskEncoder(L.LightningModule):
         pred_standard:Float[torch.Tensor, "batch_size grid_area channels"] = results['standard']["decoding:padded_original"]
         pred_mirrored:Float[torch.Tensor, "batch_size grid_area channels"] = results['mirrored']["decoding:padded_original"]
 
-        # Convert one-hot [B, 10, 30, 30] back to integer class indices [B, 30, 30]
-        # Channels 1-10 are stored in dim=1; prepend background (0) channel and argmax
         original_onehot = batch['grid:padded_original']
         augmented_onehot = batch['grid:padded_augmentation']
         bg_orig = 1.0 - original_onehot.sum(dim=1, keepdim=True)
