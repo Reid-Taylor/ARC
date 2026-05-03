@@ -168,12 +168,12 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
                 "dim_model": shared_model_config['latent_size']
             },
             "Decoder": {
-                "input_size": shared_model_config['latent_size'],
+                "input_size": shared_model_config['latent_size'] * 4,
                 "num_layers": encoder_config['n_layers'],
                 "output_size": encoder_config['grid_size']
             },
             "Contrastive Projection": {
-                "input_size": shared_model_config['latent_size'],
+                "input_size": shared_model_config['latent_size'] * 4,
                 "output_size": shared_model_config['latent_size']
             },
             "Contrastive Predictor": {
@@ -195,7 +195,7 @@ def create_model(config: Dict[str, Any]) -> MultiTaskEncoder:
             },
             "Attribute Predictor": {
                 key: {
-                    "input_size": shared_model_config['latent_size'],
+                    "input_size": shared_model_config['latent_size'] * 4,
                     "n_heads": downstream_attributes_config[key]['n_heads'],
                     "output_sizes": downstream_attributes_config[key]['output_sizes']
                 } for key in downstream_attributes_config.keys()

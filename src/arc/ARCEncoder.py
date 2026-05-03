@@ -100,7 +100,7 @@ class MultiTaskEncoder(L.LightningModule):
         }
         return params
         
-    def _forward_grid(self, grid_1, grid_2):
+    def _forward_grid(self, grid_1, grid_2, complementary_information):
         """
         This function calls each of the component modules of the MultiTaskEncoder in sequence and passes from one to the next the results.
         Accepts batched tensors — grid_1 and grid_2 can have arbitrary batch dimension.
@@ -110,17 +110,23 @@ class MultiTaskEncoder(L.LightningModule):
         results_dict['grid:encoded_original'] = grid_1
         results_dict['grid:encoded_augmentation'] = grid_2
 
-        encoder_embedding = self.online_encoder(grid_1)
-        results_dict['embedding:original'] = encoder_embedding
-        results_dict['embedding:augmentation'] = self.target_encoder(grid_2)
-        results_dict['decoding:padded_original'] = self.decoder(encoder_embedding)
+        embedding_original = self.online_encoder(grid_1)
+        embedding_augmentation = self.target_encoder(grid_2)
 
-        results_dict['embedding:contrastive_space:online'] = self.online_projector(encoder_embedding)
+        results_dict['embedding:original'] = embedding_original
+        results_dict['embedding:augmentation'] = embedding_augmentation
+
+        embedding_original = torch.cat([embedding_original,complementary_information],dim=1)
+        embedding_augmentation = torch.cat([embedding_augmentation,complementary_information],dim=1) 
+
+        results_dict['decoding:padded_original'] = self.decoder(embedding_original)
+
+        results_dict['embedding:contrastive_space:online'] = self.online_projector(embedding_original)
         results_dict['embedding:contrastive_space:prediction'] = self.online_predictor(results_dict['embedding:contrastive_space:online'])
-        results_dict['embedding:contrastive_space:target'] = self.target_projector(results_dict['embedding:augmentation'])
+        results_dict['embedding:contrastive_space:target'] = self.target_projector(embedding_augmentation)
 
         for attribute in self.downstream_attributes:
-            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(encoder_embedding)
+            results_dict[f'attribute:{attribute}'] = getattr(self, f"attribute:{attribute}")(embedding_original)
 
         return results_dict
 
@@ -136,20 +142,20 @@ class MultiTaskEncoder(L.LightningModule):
         encoded_originals = self.preprocessor(stacked['grid:padded_original'])
         encoded_augmentations = self.preprocessor(stacked['grid:padded_augmentation'])
 
-        channel_features_orig = self.channel_summary(stacked['grid:padded_original']).unsqueeze(1)
-        channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
+        channel_features_orig = self.channel_summary(stacked['grid:padded_original'])
+        channel_features_aug = self.channel_summary(stacked['grid:padded_augmentation'])
 
-        row_features_orig = self.row_summary(stacked['grid:padded_original']).unsqueeze(1)
-        row_features_aug = self.row_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
+        row_features_orig = self.row_summary(stacked['grid:padded_original'])
+        row_features_aug = self.row_summary(stacked['grid:padded_augmentation'])
 
-        col_features_orig = self.column_summary(stacked['grid:padded_original']).unsqueeze(1)
-        col_features_aug = self.column_summary(stacked['grid:padded_augmentation']).unsqueeze(1)
+        col_features_orig = self.column_summary(stacked['grid:padded_original'])
+        col_features_aug = self.column_summary(stacked['grid:padded_augmentation'])
 
-        encoded_originals = torch.cat([encoded_originals, channel_features_orig, row_features_orig, col_features_orig], dim=1)
-        encoded_augmentations = torch.cat([encoded_augmentations, channel_features_aug, row_features_aug, col_features_aug], dim=1)
+        complementary_originals = torch.cat([channel_features_orig, row_features_orig, col_features_orig], dim=-1)
+        complementary_augmentations = torch.cat([channel_features_aug, row_features_aug, col_features_aug], dim=-1)
 
-        standard = self._forward_grid(encoded_originals, encoded_augmentations)
-        mirrored = self._forward_grid(encoded_augmentations, encoded_originals)
+        standard = self._forward_grid(encoded_originals, encoded_augmentations, complementary_originals)
+        mirrored = self._forward_grid(encoded_augmentations, encoded_originals, complementary_augmentations)
 
         return {
             'stacked': {'standard': standard, 'mirrored': mirrored},
@@ -211,6 +217,7 @@ class MultiTaskEncoder(L.LightningModule):
         for key in self.augmentation_representations.keys():
             repr_diff = results['standard']["embedding:original"] - results['mirrored']["embedding:original"]
             repr_true:torch.Tensor = self.augmentation_representations[key]
+            
             repr_true = repr_true.expand_as(repr_diff)
             repr_true = repr_true * batch[f'presence:{key}'].unsqueeze(dim=-1)
             mse = F.mse_loss(repr_diff, repr_true)
@@ -244,6 +251,8 @@ class MultiTaskEncoder(L.LightningModule):
         Vectorized comparative loss across all problems. Uses pre-built index
         tensors from the collate function to gather embeddings in a single
         operation, avoiding any Python-level per-problem loop.
+
+        This function trains the network to learn positionally relative embeddings, such that the euclidean distance between two embeddings should represent the transformation from input to output grid.
         """
         indices = batch['problem_indices']
         all_embeddings = results['stacked']['standard']['embedding:original']
@@ -290,7 +299,8 @@ class MultiTaskEncoder(L.LightningModule):
         """
         reconstruction_loss, downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss = self._calculate_loss(results['stacked'], batch['stacked_batch'])
 
-        comparative_loss, prediction_loss = self._calculate_comparative_loss(results, batch)
+        # comparative_loss, prediction_loss = self._calculate_comparative_loss(results, batch)
+        comparative_loss, prediction_loss = torch.zeros_like(reconstruction_loss, requires_grad=False), torch.zeros_like(reconstruction_loss, requires_grad=False)
 
         return comparative_loss.view(1), prediction_loss.view(1), reconstruction_loss.view(1), downstream_attribute_loss, task_sensitive_loss, task_invariant_loss, variable_embedding_loss.view(1)
 
@@ -336,7 +346,7 @@ class MultiTaskEncoder(L.LightningModule):
             """
             shared_params = all_params['online_encoder']
             grouped_losses = [
-                comparative_loss + predictive_loss,
+                # comparative_loss + predictive_loss,
                 reconstruction_loss,
                 downstream_attribute_loss.sum(),
                 task_sensitive_loss.sum(),
@@ -482,8 +492,8 @@ class MultiTaskEncoder(L.LightningModule):
             "Probability/Prediction": torch.exp(-1.0*predictive_loss.detach()),
 
             "Train/Reconstruction CE": reconstruction_loss.detach(),
-            "Train/Prediction CE": predictive_loss.detach(),
-            "Train/Contrastive MSE": comparative_loss.detach().mean(),
+            # "Train/Prediction CE": predictive_loss.detach(),
+            # "Train/Contrastive MSE": comparative_loss.detach().mean(),
             "Train/Transformation Map MSE": task_sensitive_loss.detach().mean(),
             "Train/Task Ignorance MSE": task_invariant_loss.detach().mean(),
 
